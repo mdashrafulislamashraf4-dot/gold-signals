@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: gold-signals
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TIMEZONE
+        value: Asia/Dhaka
+      - key: SIGNAL_CHECK_INTERVAL
+        value: "15"
+      - key: RISK_PER_TRADE
+        value: "2"
+      - key: MIN_CONFIDENCE
+        value: "65"
+      - key: DAILY_REPORT_TIME
+        value: "23:59"
+      - key: GOLD_SYMBOL
+        value: GC=F
+      - key: TIMEFRAMES
+        value: 1h,4h,1d
