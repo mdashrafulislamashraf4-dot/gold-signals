@@ -5,3 +5,4 @@ logs/
 database/*.db
 .venv/
 venv/
+gh_bin/
