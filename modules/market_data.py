@@ -40,8 +40,42 @@ class MarketDataFetcher:
     # Current Price
     # ─────────────────────────────────────────────────────────
     def get_current_price(self) -> Optional[float]:
-        """বর্তমান গোল্ড প্রাইস ফেচ করে (multiple fallbacks)"""
-        # 1) Try yfinance
+        """
+        বর্তমান গোল্ড প্রাইস ফেচ করে — সরাসরি TradingView OANDA:XAUUSD থেকে
+        """
+        # 1) Try TradingView CFD Scanner API directly for OANDA:XAUUSD (100% exact match)
+        try:
+            url = "https://scanner.tradingview.com/cfd/scan"
+            payload = {
+                "symbols": {"tickers": ["OANDA:XAUUSD"]},
+                "columns": ["close"]
+            }
+            resp = requests.post(url, json=payload, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+            if resp.ok:
+                data = resp.json()
+                rows = data.get("data", [])
+                if rows and len(rows[0].get("d", [])) > 0:
+                    price = rows[0]["d"][0]
+                    if price and price > 0:
+                        logger.info(f"Gold spot price from TradingView (OANDA:XAUUSD): {price}")
+                        return round(float(price), 2)
+        except Exception as e:
+            logger.warning(f"TradingView scanner fetch failed: {e}")
+
+        # 2) Try Gold-API spot price (Free live spot)
+        try:
+            url = "https://api.gold-api.com/price/XAU"
+            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+            if resp.ok:
+                data = resp.json()
+                price = data.get("price")
+                if price and price > 0:
+                    logger.info(f"Gold spot price from Gold-API: {price}")
+                    return round(float(price), 2)
+        except Exception as e:
+            logger.warning(f"Gold-API fetch failed: {e}")
+
+        # 3) Fallback to yfinance GC=F
         for sym in self.GOLD_SYMBOLS:
             try:
                 ticker = yf.Ticker(sym)
@@ -52,18 +86,6 @@ class MarketDataFetcher:
             except Exception as e:
                 logger.warning(f"yfinance {sym} failed: {e}")
 
-        # 2) Try metals-api (free endpoint)
-        try:
-            url  = "https://api.metals.live/v1/spot/gold"
-            resp = requests.get(url, timeout=10)
-            if resp.ok:
-                data = resp.json()
-                price = data[0].get("price") if isinstance(data, list) else data.get("price")
-                if price:
-                    return round(float(price), 2)
-        except Exception as e:
-            logger.warning(f"metals.live failed: {e}")
-
         return None
 
     # ─────────────────────────────────────────────────────────
@@ -71,8 +93,7 @@ class MarketDataFetcher:
     # ─────────────────────────────────────────────────────────
     def get_ohlcv(self, timeframe: str = "1h", bars: int = 200) -> Optional[pd.DataFrame]:
         """
-        OHLCV ক্যান্ডেল ডেটা ফেচ করে
-        timeframe: '1m','5m','15m','30m','60m','1d','1wk'
+        OHLCV ক্যান্ডেল ডেটা ফেচ করে এবং Spot Gold (OANDA:XAUUSD) প্রাইসের সাথে সিঙ্ক করে
         """
         tf_map = {
             "1m": "1m", "5m": "5m", "15m": "15m",
@@ -81,13 +102,14 @@ class MarketDataFetcher:
         }
         yf_tf = tf_map.get(timeframe, "60m")
 
-        # Calculate period
         if yf_tf in ("1m",):
             period = "7d"
         elif yf_tf in ("5m", "15m", "30m", "60m"):
             period = "60d"
         else:
             period = "2y"
+
+        spot_price = self.get_current_price()
 
         for sym in self.GOLD_SYMBOLS:
             try:
@@ -103,7 +125,19 @@ class MarketDataFetcher:
                     df = df.rename(columns=str.capitalize)
                     df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
                     df = df.tail(bars)
-                    logger.info(f"OHLCV fetched: {sym} {timeframe} — {len(df)} bars")
+
+                    # Align with Spot Price if using futures data
+                    if spot_price and not df.empty:
+                        last_close = df["Close"].iloc[-1]
+                        diff = last_close - spot_price
+                        # If difference is more than 3 dollars, calibrate to spot
+                        if abs(diff) > 3.0:
+                            df["Open"]  = (df["Open"] - diff).round(2)
+                            df["High"]  = (df["High"] - diff).round(2)
+                            df["Low"]   = (df["Low"] - diff).round(2)
+                            df["Close"] = (df["Close"] - diff).round(2)
+
+                    logger.info(f"OHLCV fetched & calibrated: {sym} {timeframe} — {len(df)} bars")
                     return df
             except Exception as e:
                 logger.warning(f"OHLCV fetch failed for {sym}/{timeframe}: {e}")
