@@ -1,0 +1,292 @@
+"""
+============================================================
+  modules/news_analyzer.py
+  গোল্ড-সংক্রান্ত নিউজ ফেচ ও সেন্টিমেন্ট এনালাইসিস
+  Sources: NewsAPI (free), Google News RSS, Economic Calendar
+============================================================
+"""
+
+import logging
+import time
+from datetime import datetime, timedelta
+from typing import Optional
+import re
+
+import feedparser
+import requests
+
+logger = logging.getLogger(__name__)
+
+
+class NewsAnalyzer:
+    """গোল্ড মার্কেট-সংক্রান্ত নিউজ এনালাইসিস করে"""
+
+    HIGH_IMPACT_KEYWORDS = [
+        "war", "attack", "military", "nuclear", "missile", "bomb",
+        "sanctions", "invasion", "conflict", "crisis", "explosion",
+        "Federal Reserve", "Fed rate", "rate hike", "rate cut", "FOMC",
+        "CPI", "inflation", "NFP", "non-farm", "GDP", "recession",
+        "dollar collapse", "debt ceiling", "default",
+        "China gold", "central bank gold", "gold reserves",
+    ]
+
+    BULLISH_KEYWORDS = [
+        "gold rises", "gold surges", "gold rally", "gold up",
+        "dollar falls", "dollar weakens", "DXY down",
+        "inflation high", "recession fears", "safe haven demand",
+        "war escalation", "conflict worsens", "geopolitical tension",
+        "rate cut", "dovish", "Fed pauses",
+        "gold demand", "central bank buying",
+    ]
+
+    BEARISH_KEYWORDS = [
+        "gold falls", "gold drops", "gold declines", "gold down",
+        "dollar strengthens", "dollar rises", "DXY up",
+        "rate hike", "hawkish", "inflation cools",
+        "risk on", "stocks rally", "peace deal",
+        "gold sell-off", "gold pressure",
+    ]
+
+    # ─────────────────────────────────────────────────────────
+    # Google News RSS Feed
+    # ─────────────────────────────────────────────────────────
+    def fetch_google_news(self, query: str = "gold price XAUUSD") -> list:
+        """Google News RSS থেকে নিউজ ফেচ করে (সম্পূর্ণ ফ্রি)"""
+        try:
+            encoded  = requests.utils.quote(query)
+            url      = f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
+            feed     = feedparser.parse(url)
+            articles = []
+            for entry in feed.entries[:15]:
+                articles.append({
+                    "title":     entry.get("title", ""),
+                    "summary":   entry.get("summary", ""),
+                    "link":      entry.get("link", ""),
+                    "published": entry.get("published", ""),
+                    "source":    entry.get("source", {}).get("title", "Google News"),
+                })
+            logger.info(f"Google News: {len(articles)} articles for '{query}'")
+            return articles
+        except Exception as e:
+            logger.error(f"Google News RSS error: {e}")
+            return []
+
+    # ─────────────────────────────────────────────────────────
+    # NewsAPI.org
+    # ─────────────────────────────────────────────────────────
+    def fetch_newsapi(self, api_key: str, query: str = "gold price") -> list:
+        """NewsAPI.org থেকে নিউজ ফেচ করে"""
+        if not api_key:
+            return []
+        try:
+            from_date = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+            url = "https://newsapi.org/v2/everything"
+            params = {
+                "q":          query,
+                "from":       from_date,
+                "sortBy":     "publishedAt",
+                "language":   "en",
+                "pageSize":   20,
+                "apiKey":     api_key,
+            }
+            resp = requests.get(url, params=params, timeout=15)
+            if resp.ok:
+                data = resp.json()
+                articles = []
+                for a in data.get("articles", []):
+                    articles.append({
+                        "title":     a.get("title", ""),
+                        "summary":   a.get("description", ""),
+                        "link":      a.get("url", ""),
+                        "published": a.get("publishedAt", ""),
+                        "source":    a.get("source", {}).get("name", "NewsAPI"),
+                    })
+                logger.info(f"NewsAPI: {len(articles)} articles")
+                return articles
+        except Exception as e:
+            logger.error(f"NewsAPI error: {e}")
+        return []
+
+    # ─────────────────────────────────────────────────────────
+    # Combine all sources
+    # ─────────────────────────────────────────────────────────
+    def fetch_all_news(self, api_key: str = "") -> list:
+        """সব সোর্স থেকে নিউজ কম্বাইন করে"""
+        all_news = []
+
+        # Gold specific
+        all_news += self.fetch_google_news("gold price XAUUSD forecast")
+        time.sleep(0.5)
+        all_news += self.fetch_google_news("gold market war geopolitical")
+        time.sleep(0.5)
+        all_news += self.fetch_google_news("Federal Reserve interest rate decision")
+        time.sleep(0.5)
+        all_news += self.fetch_google_news("US dollar inflation CPI NFP")
+
+        if api_key:
+            all_news += self.fetch_newsapi(api_key, "gold XAU price")
+
+        # Deduplicate by title
+        seen   = set()
+        unique = []
+        for n in all_news:
+            title = n.get("title", "")
+            if title and title not in seen:
+                seen.add(title)
+                unique.append(n)
+
+        logger.info(f"Total unique news: {len(unique)}")
+        return unique
+
+    # ─────────────────────────────────────────────────────────
+    # Sentiment Analysis (keyword-based, no API needed)
+    # ─────────────────────────────────────────────────────────
+    def analyze_sentiment(self, articles: list) -> dict:
+        """
+        নিউজ সেন্টিমেন্ট এনালাইসিস করে
+        Returns: {score, direction, impact, key_events, high_impact_news}
+        """
+        if not articles:
+            return {
+                "score":           50,
+                "direction":       "NEUTRAL",
+                "impact":          "LOW",
+                "key_events":      [],
+                "high_impact_news": [],
+                "summary":         "No news available",
+            }
+
+        bullish_count  = 0
+        bearish_count  = 0
+        neutral_count  = 0
+        key_events     = []
+        high_impact    = []
+
+        for article in articles:
+            text  = (article.get("title", "") + " " + article.get("summary", "")).lower()
+            score = 0
+
+            for kw in self.BULLISH_KEYWORDS:
+                if kw.lower() in text:
+                    score += 1
+
+            for kw in self.BEARISH_KEYWORDS:
+                if kw.lower() in text:
+                    score -= 1
+
+            if score > 0:
+                bullish_count += 1
+            elif score < 0:
+                bearish_count += 1
+            else:
+                neutral_count += 1
+
+            # Check high impact
+            is_high_impact = False
+            for kw in self.HIGH_IMPACT_KEYWORDS:
+                if kw.lower() in text:
+                    is_high_impact = True
+                    break
+
+            if is_high_impact:
+                high_impact.append({
+                    "title":  article.get("title", ""),
+                    "source": article.get("source", ""),
+                    "link":   article.get("link", ""),
+                })
+                key_events.append(article.get("title", "")[:100])
+
+        total = bullish_count + bearish_count + neutral_count
+        if total == 0:
+            sentiment_score = 50
+        else:
+            sentiment_score = int((bullish_count / total) * 100)
+
+        if sentiment_score >= 60:
+            direction = "BULLISH"
+        elif sentiment_score <= 40:
+            direction = "BEARISH"
+        else:
+            direction = "NEUTRAL"
+
+        impact = "HIGH" if len(high_impact) >= 3 else ("MEDIUM" if len(high_impact) >= 1 else "LOW")
+
+        return {
+            "score":            sentiment_score,
+            "direction":        direction,
+            "impact":           impact,
+            "bullish_count":    bullish_count,
+            "bearish_count":    bearish_count,
+            "key_events":       key_events[:5],
+            "high_impact_news": high_impact[:5],
+            "total_analyzed":   total,
+        }
+
+    # ─────────────────────────────────────────────────────────
+    # Economic Calendar (Investing.com public RSS)
+    # ─────────────────────────────────────────────────────────
+    def get_economic_calendar(self) -> list:
+        """আজকের ইকোনমিক ইভেন্ট ফেচ করে"""
+        events = []
+
+        # Key economic events that affect gold
+        high_impact_events = [
+            "Non-Farm Payrolls", "NFP", "CPI", "Consumer Price Index",
+            "FOMC", "Federal Reserve", "GDP", "Interest Rate",
+            "Unemployment", "PPI", "PCE", "Retail Sales",
+        ]
+
+        try:
+            # Use forexfactory RSS (free)
+            url  = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
+            resp = requests.get(url, timeout=15)
+            if resp.ok:
+                feed = feedparser.parse(resp.content)
+                for entry in feed.entries:
+                    title   = entry.get("title", "")
+                    is_high = any(kw.lower() in title.lower() for kw in high_impact_events)
+                    events.append({
+                        "event":   title,
+                        "time":    entry.get("published", ""),
+                        "impact":  "HIGH" if is_high else "MEDIUM",
+                        "summary": entry.get("summary", ""),
+                    })
+            logger.info(f"Economic calendar: {len(events)} events")
+        except Exception as e:
+            logger.warning(f"Economic calendar error: {e}")
+
+        # Add known upcoming high-impact events from Google News
+        try:
+            news = self.fetch_google_news("economic calendar today FOMC CPI NFP")
+            for n in news[:5]:
+                events.append({
+                    "event":   n.get("title", ""),
+                    "time":    n.get("published", ""),
+                    "impact":  "HIGH",
+                    "source":  n.get("source", ""),
+                })
+        except Exception:
+            pass
+
+        return events[:20]
+
+    # ─────────────────────────────────────────────────────────
+    # Format news for Telegram
+    # ─────────────────────────────────────────────────────────
+    def format_news_alert(self, article: dict, impact: str = "HIGH") -> str:
+        """টেলিগ্রামে পাঠানোর জন্য নিউজ ফরম্যাট করে"""
+        emoji = "🚨" if impact == "HIGH" else "📰"
+        title  = article.get("title", "")[:150]
+        source = article.get("source", "")
+        link   = article.get("link", "")
+
+        msg = (
+            f"{emoji} <b>GOLD NEWS ALERT</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📌 {title}\n"
+            f"📎 Source: {source}\n"
+            f"⚠️ Impact: {impact}\n"
+        )
+        if link:
+            msg += f"🔗 <a href='{link}'>Read More</a>\n"
+        return msg
