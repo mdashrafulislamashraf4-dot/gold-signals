@@ -173,13 +173,13 @@ def main():
         init_sig = scheduler.run_analysis(send_regardless=True)
         if init_sig and init_sig.get("direction") == "NEUTRAL":
             telegram_bot.send_message(
-                f"📊 <b>Initial Market Scan Complete</b>\n"
+                f"📊 <b>প্রাথমিক গোল্ড মার্কেট স্ক্যান সম্পন্ন</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"💰 <b>Gold Price:</b> <code>${init_sig.get('entry', 0)}</code>\n"
-                f"⚖️ <b>Status:</b> <b>NEUTRAL / WAITING</b>\n"
-                f"📈 <b>Technical Score:</b> <b>{init_sig.get('tech_score', 0)}/100</b>\n"
-                f"🤖 <b>AI Confidence:</b> <b>{init_sig.get('confidence', 0)}%</b>\n\n"
-                f"<i>The system is scanning every 15 mins and will alert immediately when a high-probability BUY/SELL setup is detected!</i>"
+                f"💰 <b>বর্তমান প্রাইস:</b> <code>${init_sig.get('entry', 0)}</code> (TradingView)\n"
+                f"⚖️ <b>মার্কেট অবস্থা:</b> <b>নিরপেক্ষ (কনফার্মেশন অপেক্ষা)</b>\n"
+                f"📈 <b>টেকনিক্যাল স্কোর:</b> <b>{init_sig.get('tech_score', 0)}/100</b>\n"
+                f"🤖 <b>এআই কনফিডেন্স:</b> <b>{init_sig.get('confidence', 0)}%</b>\n\n"
+                f"<i>সিস্টেম সার্বক্ষণিক নজর রাখছে। কোনো সুযোগ আসলেই সাথে সাথে স্বয়ংক্রিয় BUY/SELL সিগনাল ও নোটিফিকেশন পাঠানো হবে!</i>"
             )
     except Exception as e:
         logger.error(f"Initial analysis error: {e}")

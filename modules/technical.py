@@ -208,121 +208,6 @@ class TechnicalAnalyzer:
         return levels
 
     # ─────────────────────────────────────────────────────────
-    # Smart Money Concepts (SMC) Analysis
-    # ─────────────────────────────────────────────────────────
-    def detect_smart_money(self, df: pd.DataFrame) -> dict:
-        """
-        Smart Money Concepts (SMC) এনালাইসিস:
-        • Order Blocks (OB)
-        • Fair Value Gaps (FVG)
-        • Liquidity Sweeps
-        • Break of Structure (BOS)
-        """
-        smc = {
-            "order_blocks": [],
-            "fvg": [],
-            "liquidity_sweeps": [],
-            "structure": "NEUTRAL",
-            "smc_score": 50
-        }
-        if df is None or len(df) < 10:
-            return smc
-
-        o = df["Open"].values
-        h = df["High"].values
-        l = df["Low"].values
-        c = df["Close"].values
-        n = len(c)
-
-        bullish_smc = 0
-        bearish_smc = 0
-
-        # 1. Fair Value Gap (FVG) Detection (Last 10 candles)
-        for i in range(n - 10, n - 1):
-            if i >= 2:
-                # Bullish FVG: Low of candle i > High of candle i-2
-                if l[i] > h[i-2] and (l[i] - h[i-2]) > 0.5:
-                    fvg_size = round(l[i] - h[i-2], 2)
-                    smc["fvg"].append({
-                        "type": "BULLISH_FVG",
-                        "top": round(l[i], 2),
-                        "bottom": round(h[i-2], 2),
-                        "size": fvg_size,
-                        "desc": f"🟢 Bullish FVG ({round(h[i-2],2)} - {round(l[i],2)})"
-                    })
-                    bullish_smc += 1
-                # Bearish FVG: High of candle i < Low of candle i-2
-                elif h[i] < l[i-2] and (l[i-2] - h[i]) > 0.5:
-                    fvg_size = round(l[i-2] - h[i], 2)
-                    smc["fvg"].append({
-                        "type": "BEARISH_FVG",
-                        "top": round(l[i-2], 2),
-                        "bottom": round(h[i], 2),
-                        "size": fvg_size,
-                        "desc": f"🔴 Bearish FVG ({round(h[i],2)} - {round(l[i-2],2)})"
-                    })
-                    bearish_smc += 1
-
-        # 2. Order Blocks (OB) Detection
-        for i in range(n - 15, n - 2):
-            if i >= 1:
-                body_next = abs(c[i+1] - o[i+1])
-                # Bullish OB: Bearish candle followed by strong bullish displacement
-                if c[i] < o[i] and c[i+1] > o[i+1] and body_next > abs(c[i] - o[i]) * 1.8:
-                    smc["order_blocks"].append({
-                        "type": "BULLISH_OB",
-                        "zone_high": round(h[i], 2),
-                        "zone_low": round(l[i], 2),
-                        "desc": f"🟢 Bullish Demand OB @ {round(l[i],2)}-{round(h[i],2)}"
-                    })
-                    bullish_smc += 1
-                # Bearish OB: Bullish candle followed by strong bearish displacement
-                elif c[i] > o[i] and c[i+1] < o[i+1] and body_next > abs(c[i] - o[i]) * 1.8:
-                    smc["order_blocks"].append({
-                        "type": "BEARISH_OB",
-                        "zone_high": round(h[i], 2),
-                        "zone_low": round(l[i], 2),
-                        "desc": f"🔴 Bearish Supply OB @ {round(l[i],2)}-{round(h[i],2)}"
-                    })
-                    bearish_smc += 1
-
-        # 3. Liquidity Sweep Detection (Turtle Soup / Stop Hunt)
-        lookback = 20
-        recent_high = max(h[max(0, n - lookback - 1) : n - 2])
-        recent_low  = min(l[max(0, n - lookback - 1) : n - 2])
-
-        # Sweep High: Current candle spiked above recent high but closed back below (Sell setup)
-        if h[-1] > recent_high and c[-1] < recent_high:
-            smc["liquidity_sweeps"].append({
-                "type": "BUY_SIDE_LIQUIDITY_SWEPT",
-                "level": round(recent_high, 2),
-                "desc": f"🩸 Buy-side Liquidity Swept @ {round(recent_high,2)} (Bearish Reversal)"
-            })
-            bearish_smc += 2
-
-        # Sweep Low: Current candle spiked below recent low but closed back above (Buy setup)
-        if l[-1] < recent_low and c[-1] > recent_low:
-            smc["liquidity_sweeps"].append({
-                "type": "SELL_SIDE_LIQUIDITY_SWEPT",
-                "level": round(recent_low, 2),
-                "desc": f"🩸 Sell-side Liquidity Swept @ {round(recent_low,2)} (Bullish Reversal)"
-            })
-            bullish_smc += 2
-
-        # SMC Structure & Scoring
-        total = bullish_smc + bearish_smc
-        if total > 0:
-            smc["smc_score"] = int((bullish_smc / total) * 100)
-            if smc["smc_score"] >= 60:
-                smc["structure"] = "BULLISH_ORDER_FLOW"
-            elif smc["smc_score"] <= 40:
-                smc["structure"] = "BEARISH_ORDER_FLOW"
-            else:
-                smc["structure"] = "EQUILIBRIUM"
-
-        return smc
-
-    # ─────────────────────────────────────────────────────────
     # Generate Technical Score
     # ─────────────────────────────────────────────────────────
     def get_technical_score(self, df: pd.DataFrame) -> dict:
@@ -347,13 +232,13 @@ class TechnicalAnalyzer:
         if not np.isnan(rsi):
             details["RSI"] = round(rsi, 1)
             if rsi < 30:
-                buy_signals.append(f"RSI {rsi:.0f} → Oversold (BUY)")
+                buy_signals.append(f"RSI {rsi:.0f} → ওভারসোল্ড জোন (BUY সাপোর্ট)")
             elif rsi > 70:
-                sell_signals.append(f"RSI {rsi:.0f} → Overbought (SELL)")
+                sell_signals.append(f"RSI {rsi:.0f} → ওভারবট জোন (SELL প্রেসার)")
             elif rsi < 50:
-                buy_signals.append(f"RSI {rsi:.0f} → Bullish zone")
+                buy_signals.append(f"RSI {rsi:.0f} → বুলিশ জোনে প্রবেশ")
             else:
-                sell_signals.append(f"RSI {rsi:.0f} → Bearish zone")
+                sell_signals.append(f"RSI {rsi:.0f} → বেয়ারিশ জোনে প্রবেশ")
 
         # ── MACD ──────────────────────────────────────────────
         macd   = last.get("MACD", np.nan)
@@ -362,13 +247,13 @@ class TechnicalAnalyzer:
         if not (np.isnan(macd) or np.isnan(macd_s)):
             details["MACD"] = round(macd, 2)
             if macd > macd_s:
-                buy_signals.append("MACD → Bullish crossover")
+                buy_signals.append("MACD → বুলিশ ক্রসওভার (ঊর্ধ্বমুখী মোমেন্টাম)")
             else:
-                sell_signals.append("MACD → Bearish crossover")
+                sell_signals.append("MACD → বেয়ারিশ ক্রসওভার (নিম্নমুখী মোমেন্টাম)")
             if not np.isnan(macd_h) and macd_h > 0:
-                buy_signals.append("MACD Histogram → Positive (momentum bullish)")
+                buy_signals.append("MACD হিস্টোগ্রাম → পজিটিভ গতিধারা")
             elif not np.isnan(macd_h):
-                sell_signals.append("MACD Histogram → Negative (momentum bearish)")
+                sell_signals.append("MACD হিস্টোগ্রাম → নেগেটিভ গতিধারা")
 
         # ── EMA Trend ─────────────────────────────────────────
         ema20  = last.get("EMA_20", np.nan)
@@ -380,21 +265,21 @@ class TechnicalAnalyzer:
             details["EMA_200"] = round(ema200, 2) if not np.isnan(ema200) else "N/A"
 
             if close > ema20:
-                buy_signals.append("Price > EMA20 (Bullish)")
+                buy_signals.append("প্রাইস EMA20-এর উপরে (স্বল্পমেয়াদী বুলিশ)")
             else:
-                sell_signals.append("Price < EMA20 (Bearish)")
+                sell_signals.append("প্রাইস EMA20-এর নিচে (স্বল্পমেয়াদী বেয়ারিশ)")
 
             if not np.isnan(ema50):
                 if ema20 > ema50:
-                    buy_signals.append("EMA20 > EMA50 → Golden cross zone")
+                    buy_signals.append("EMA20 > EMA50 → গোল্ডেন ক্রস তৈরি হয়েছে")
                 else:
-                    sell_signals.append("EMA20 < EMA50 → Death cross zone")
+                    sell_signals.append("EMA20 < EMA50 → ডেথ ক্রস তৈরি হয়েছে")
 
             if not np.isnan(ema200):
                 if close > ema200:
-                    buy_signals.append("Price above EMA200 → Long-term bullish")
+                    buy_signals.append("প্রাইস EMA200-এর উপরে → দীর্ঘমেয়াদী বুলিশ আপট্রেন্ড")
                 else:
-                    sell_signals.append("Price below EMA200 → Long-term bearish")
+                    sell_signals.append("প্রাইস EMA200-এর নিচে → দীর্ঘমেয়াদী বেয়ারিশ ডাউনট্রেন্ড")
 
         # ── Bollinger Bands ───────────────────────────────────
         bb_up  = last.get("BB_Upper", np.nan)
@@ -404,11 +289,11 @@ class TechnicalAnalyzer:
             details["BB_Upper"] = round(bb_up, 2)
             details["BB_Lower"] = round(bb_low, 2)
             if close < bb_low:
-                buy_signals.append("Price below BB Lower → Oversold bounce expected")
+                buy_signals.append("বলিঙ্গার ব্যান্ডের নিচে → বাউন্স ব্যাকের তীব্র সম্ভাবনা")
             elif close > bb_up:
-                sell_signals.append("Price above BB Upper → Overbought")
+                sell_signals.append("বলিঙ্গার ব্যান্ডের উপরে → রিভার্সালের সম্ভাবনা")
             elif not np.isnan(bb_pct) and bb_pct < 0.2:
-                buy_signals.append("BB% < 20% → Near lower band (BUY zone)")
+                buy_signals.append("বলিঙ্গার লোয়ার ব্যান্ড সংলগ্ন → BUY সাপোর্ট জোন")
 
         # ── Stochastic ────────────────────────────────────────
         stk = last.get("STOCH_K", np.nan)
@@ -416,13 +301,13 @@ class TechnicalAnalyzer:
         if not np.isnan(stk):
             details["Stochastic_K"] = round(stk, 1)
             if stk < 20 and std < 20:
-                buy_signals.append(f"Stochastic {stk:.0f} → Oversold")
+                buy_signals.append(f"স্টোকাস্টিক {stk:.0f} → ওভারসোল্ড জোন")
             elif stk > 80 and std > 80:
-                sell_signals.append(f"Stochastic {stk:.0f} → Overbought")
+                sell_signals.append(f"স্টোকাস্টিক {stk:.0f} → ওভারবট জোন")
             if not np.isnan(std) and stk > std:
-                buy_signals.append("Stochastic K > D → Bullish")
+                buy_signals.append("স্টোকাস্টিক K > D → বুলিশ সিগনাল")
             elif not np.isnan(std):
-                sell_signals.append("Stochastic K < D → Bearish")
+                sell_signals.append("স্টোকাস্টিক K < D → বেয়ারিশ সিগনাল")
 
         # ── ADX Trend Strength ────────────────────────────────
         adx    = last.get("ADX", np.nan)
@@ -432,40 +317,27 @@ class TechnicalAnalyzer:
             details["ADX"] = round(adx, 1)
             if adx > 25:
                 if not np.isnan(di_pos) and di_pos > di_neg:
-                    buy_signals.append(f"ADX {adx:.0f} — Strong uptrend (+DI > -DI)")
+                    buy_signals.append(f"ADX {adx:.0f} → শক্তিশালী আপট্রেন্ড (+DI > -DI)")
                 elif not np.isnan(di_neg):
-                    sell_signals.append(f"ADX {adx:.0f} — Strong downtrend (-DI > +DI)")
+                    sell_signals.append(f"ADX {adx:.0f} → শক্তিশালী ডাউনট্রেন্ড (-DI > +DI)")
 
         # ── Williams %R ───────────────────────────────────────
         willr = last.get("WILLR", np.nan)
         if not np.isnan(willr):
             details["Williams_R"] = round(willr, 1)
             if willr < -80:
-                buy_signals.append(f"Williams %R {willr:.0f} → Oversold")
+                buy_signals.append(f"উইলিয়ামস %R {willr:.0f} → ওভারসোল্ড")
             elif willr > -20:
-                sell_signals.append(f"Williams %R {willr:.0f} → Overbought")
+                sell_signals.append(f"উইলিয়ামস %R {willr:.0f} → ওভারবট")
 
         # ── Ichimoku ──────────────────────────────────────────
         ich_conv = last.get("ICH_CONV", np.nan)
         ich_base = last.get("ICH_BASE", np.nan)
         if not (np.isnan(ich_conv) or np.isnan(ich_base)):
             if close > ich_conv and close > ich_base:
-                buy_signals.append("Price above Ichimoku cloud → Bullish")
+                buy_signals.append("প্রাইস ইচিমোকু ক্লাউডের উপরে → স্পষ্ট বুলিশ")
             elif close < ich_conv and close < ich_base:
-                sell_signals.append("Price below Ichimoku cloud → Bearish")
-
-        # ── Smart Money Concepts (SMC) ────────────────────────
-        smc = self.detect_smart_money(df)
-        if smc.get("structure") == "BULLISH_ORDER_FLOW":
-            buy_signals.append("SMC: Bullish Order Flow (Institutional buying)")
-        elif smc.get("structure") == "BEARISH_ORDER_FLOW":
-            sell_signals.append("SMC: Bearish Order Flow (Institutional selling)")
-
-        for sweep in smc.get("liquidity_sweeps", []):
-            if sweep["type"] == "SELL_SIDE_LIQUIDITY_SWEPT":
-                buy_signals.append(f"SMC: {sweep['desc']}")
-            else:
-                sell_signals.append(f"SMC: {sweep['desc']}")
+                sell_signals.append("প্রাইস ইচিমোকু ক্লাউডের নিচে → স্পষ্ট বেয়ারিশ")
 
         # ── Calculate Final Score ─────────────────────────────
         total    = len(buy_signals) + len(sell_signals)
@@ -497,5 +369,4 @@ class TechnicalAnalyzer:
             "details":     details,
             "patterns":    self.detect_patterns(df),
             "fibonacci":   self.fibonacci_levels(df),
-            "smc":         smc,
         }

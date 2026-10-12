@@ -1,14 +1,16 @@
 """
 ============================================================
   modules/scheduler.py
-  Automated tasks — সিগনাল চেক, রিপোর্ট, নিউজ মনিটর
+  Automated tasks — সিগনাল চেক, রিপোর্ট, নিউজ মনিটর ও স্পাইক ওয়াচডগ
+  (হাই-স্পিড রিয়েলটাইম নজরদারি)
 ============================================================
 """
 
 import logging
 import threading
 import time
-from datetime import datetime
+from collections import deque
+from datetime import datetime, timedelta
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -24,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class TaskScheduler:
-    """সব অটোমেটিক টাস্ক শিডিউল করে"""
+    """সব অটোমেটিক টাস্ক ও মার্কেট ওয়াচডগ শিডিউল করে"""
 
     def __init__(self, market_data, technical, news_analyzer,
                  ai_analyzer, signal_engine, telegram_bot):
@@ -40,12 +42,9 @@ class TaskScheduler:
         self._last_news_sent  = set()
         self._running         = False
 
-        # ── Real-Time Continuous Watcher (Zero Waiting Barrier) ──
-        self._price_history      = []   # [(timestamp, price)]
-        self._last_full_scan     = 0    # last full analysis timestamp
-        self._last_flash_alert   = 0    # last flash volatility alert
-        self._notified_breakeven = set() # signal IDs notified for breakeven
-        self._realtime_thread    = None
+        # Price history buffer for detecting sudden spikes: (datetime, price)
+        self._price_history   = deque(maxlen=60)
+        self._last_spike_alert_time = None
 
     # ─────────────────────────────────────────────────────────
     # Core Analysis Task
@@ -127,7 +126,7 @@ class TaskScheduler:
             return None
 
     # ─────────────────────────────────────────────────────────
-    # Monitor Active Signals (TP/SL Tracking)
+    # Monitor Active Signals (TP/SL Tracking - প্রতি ১ মিনিটে)
     # ─────────────────────────────────────────────────────────
     def monitor_signals(self):
         """চলমান সিগনালের TP/SL মনিটর করে"""
@@ -149,10 +148,44 @@ class TaskScheduler:
             logger.error(f"Signal monitoring error: {e}")
 
     # ─────────────────────────────────────────────────────────
-    # News Monitor
+    # Sudden Volatility & Price Spike Watchdog (প্রতি ৪৫ সেকেন্ডে)
+    # ─────────────────────────────────────────────────────────
+    def monitor_volatility(self):
+        """হঠাৎ বড় ওঠানামা (স্পাইক) ডিটেক্ট করে তাৎক্ষণিক সতর্কতা পাঠায়"""
+        try:
+            price = self.md.get_current_price()
+            if not price:
+                return
+
+            now = datetime.now()
+            self._price_history.append((now, price))
+
+            # Look back 5 minutes
+            five_mins_ago = now - timedelta(minutes=5)
+            old_prices = [p for t, p in self._price_history if t >= five_mins_ago]
+
+            if old_prices:
+                base_price = old_prices[0]
+                diff = price - base_price
+
+                # Threshold: $7.50 movement in 5 minutes
+                if abs(diff) >= 7.50:
+                    # Check cool-off: don't spam if alerted in last 12 minutes
+                    if (not self._last_spike_alert_time or
+                        (now - self._last_spike_alert_time).total_seconds() > 720):
+
+                        logger.warning(f"🚨 Sudden price spike detected: {diff:+.2f} USD in 5 min!")
+                        self.bot.send_volatility_alert(price, diff, 5)
+                        self._last_spike_alert_time = now
+
+        except Exception as e:
+            logger.error(f"Volatility monitor error: {e}")
+
+    # ─────────────────────────────────────────────────────────
+    # News Monitor (প্রতি ৩ মিনিটে)
     # ─────────────────────────────────────────────────────────
     def monitor_news(self):
-        """গুরুত্বপূর্ণ নিউজ মনিটর করে এবং অ্যালার্ট পাঠায়"""
+        """গুরুত্বপূর্ণ আন্তর্জাতিক সংবাদ ও যুদ্ধাবস্থা মনিটর করে এবং অ্যালার্ট পাঠায়"""
         try:
             articles    = self.na.fetch_all_news(api_key=NEWS_API_KEY)
             news_result = self.na.analyze_sentiment(articles)
@@ -160,12 +193,12 @@ class TaskScheduler:
             high_impact = news_result.get("high_impact_news", [])
             price       = self.md.get_current_price() or 0
 
-            for news in high_impact[:3]:
+            for news in high_impact[:2]:
                 news_id = news.get("title", "")[:50]
                 if news_id in self._last_news_sent:
                     continue
 
-                # AI impact analysis
+                # AI impact analysis in Bengali
                 ai_analysis = ""
                 if self.ai.available and news.get("title"):
                     ai_analysis = self.ai.analyze_news_impact(news["title"], price)
@@ -185,10 +218,10 @@ class TaskScheduler:
             logger.error(f"News monitor error: {e}")
 
     # ─────────────────────────────────────────────────────────
-    # Daily Report (রাত ১২টায়)
+    # Daily Report (রাত ১১:৫৯ মিনিটে)
     # ─────────────────────────────────────────────────────────
     def send_daily_report(self):
-        """রাত ১২টায় দৈনিক রিপোর্ট পাঠায়"""
+        """রাত ১২টায় দৈনিক হিসাব রিপোর্ট পাঠায়"""
         try:
             logger.info("Generating daily report...")
             stats = self.se.get_daily_stats()
@@ -201,7 +234,7 @@ class TaskScheduler:
     # Weekly Report (শুক্রবার মার্কেট বন্ধের পরে)
     # ─────────────────────────────────────────────────────────
     def send_weekly_report(self):
-        """শুক্রবার সাপ্তাহিক রিপোর্ট পাঠায়"""
+        """শুক্রবার সাপ্তাহিক হিসাব রিপোর্ট পাঠায়"""
         try:
             logger.info("Generating weekly report...")
             stats      = self.se.get_weekly_stats()
@@ -216,163 +249,76 @@ class TaskScheduler:
             logger.error(f"Weekly report error: {e}")
 
     # ─────────────────────────────────────────────────────────
-    # Real-Time Continuous Watcher Loop (Zero-Delay Monitoring)
-    # ─────────────────────────────────────────────────────────
-    def _realtime_loop(self):
-        """
-        অবিরাম রিয়েল-টাইম মনিটরিং (কোনো টাইমের বাধা নেই):
-        ১. প্রতি ৫ সেকেন্ডে লাইভ স্পট দাম ট্র্যাক করে
-        ২. রিয়েলটাইমে TP/SL এবং Breakeven (ঝুঁকিমুক্ত) চেক করে
-        ৩. হঠাৎ কোনো তীব্র মুভমেন্ট/স্পাইক হলে সাথে সাথে অ্যালার্ট দেয়
-        ৪. বড় মুভমেন্ট হলে সাথে সাথে রি-এনালাইসিস করে সিগনাল পাঠায়
-        """
-        logger.info("⚡ Real-Time Continuous Market Watcher active (Scanning every 5 sec)")
-        import sqlite3
-        from config import DB_PATH
-
-        while self._running:
-            try:
-                now_ts = time.time()
-                cur_price = self.md.get_current_price()
-
-                if cur_price and cur_price > 0:
-                    # 1. Update rolling price history (last 120 seconds)
-                    self._price_history.append((now_ts, cur_price))
-                    self._price_history = [
-                        (t, p) for (t, p) in self._price_history if now_ts - t <= 120
-                    ]
-
-                    # 2. Check Active Signals for TP / SL / Breakeven
-                    self._check_realtime_active_signals(cur_price)
-
-                    # 3. Flash Volatility / Momentum Spike Detection (>= $3.00 movement)
-                    if len(self._price_history) >= 2:
-                        oldest_p = self._price_history[0][1]
-                        price_diff = round(cur_price - oldest_p, 2)
-                        elapsed = int(now_ts - self._price_history[0][0])
-                        if abs(price_diff) >= 3.0 and (now_ts - self._last_flash_alert > 300):
-                            alert_msg = self.bot.format_volatility_alert(cur_price, price_diff, elapsed)
-                            self.bot.send_message(alert_msg)
-                            self._last_flash_alert = now_ts
-                            # Trigger immediate full analysis due to high volatility
-                            threading.Thread(target=self.run_analysis, kwargs={"send_regardless": False}, daemon=True).start()
-
-                    # 4. Continuous background scan (runs every 90 seconds or when triggered)
-                    if now_ts - self._last_full_scan >= 90:
-                        self._last_full_scan = now_ts
-                        threading.Thread(target=self.run_analysis, daemon=True).start()
-
-            except Exception as e:
-                logger.error(f"Realtime loop error: {e}")
-
-            time.sleep(5)
-
-    def _check_realtime_active_signals(self, cur_price: float):
-        """সক্রিয় ট্রেডের TP/SL এবং Breakeven রিয়েলটাইমে পরীক্ষা করে"""
-        import sqlite3
-        from config import DB_PATH
-
-        try:
-            # 1. Check TP / SL hits
-            alerts = self.se.check_active_signals(cur_price)
-            for alert in alerts:
-                self.bot.send_tp_sl_alert(alert["type"], alert["signal"], alert["price"])
-                logger.info(f"⚡ Instant hit: {alert['type']} at {alert['price']}")
-
-            # 2. Check for Breakeven (+15 pips / +$1.50 profit)
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute("SELECT * FROM signals WHERE status='ACTIVE'").fetchall()
-
-            for r in rows:
-                s = dict(r)
-                sid = s["id"]
-                if sid in self._notified_breakeven:
-                    continue
-
-                direction = s["direction"]
-                entry = s.get("entry_price", 0)
-                if not entry:
-                    continue
-
-                profit_usd = (cur_price - entry) if direction == "BUY" else (entry - cur_price)
-                # If trade is in profit by $1.50+ (15 pips)
-                if profit_usd >= 1.50:
-                    msg = self.bot.format_breakeven_alert(s, cur_price, profit_usd)
-                    self.bot.send_message(msg)
-                    self._notified_breakeven.add(sid)
-                    logger.info(f"🛡️ Breakeven alert sent for signal #{sid} (+{profit_usd:.2f})")
-
-        except Exception as e:
-            logger.error(f"Realtime active signal check error: {e}")
-
-    # ─────────────────────────────────────────────────────────
     # Start All Scheduled Jobs
     # ─────────────────────────────────────────────────────────
     def start(self):
-        """সব শিডিউল জব ও রিয়েল-টাইম থ্রেড শুরু করে"""
+        """সব শিডিউল জব ও ওয়াচডগ শুরু করে"""
         if self._running:
             logger.warning("Scheduler already running")
             return
 
-        self._running = True
-
-        # Launch real-time 5-second continuous watcher thread
-        self._realtime_thread = threading.Thread(target=self._realtime_loop, daemon=True)
-        self._realtime_thread.start()
-
-        # 1) Main signal analysis fallback — every N minutes
+        # 1) Main signal analysis — every N minutes (default 15m)
         self.scheduler.add_job(
             self.run_analysis,
             IntervalTrigger(minutes=SIGNAL_CHECK_INTERVAL),
             id="signal_analysis",
-            name="Signal Analysis",
+            name="সিগনাল এনালাইসিস (প্রতি ১৫ মিনিট)",
             replace_existing=True,
         )
 
-        # 2) TP/SL monitoring — every 3 minutes
+        # 2) Rapid TP/SL monitoring — every 1 minute
         self.scheduler.add_job(
             self.monitor_signals,
-            IntervalTrigger(minutes=3),
+            IntervalTrigger(minutes=1),
             id="signal_monitor",
-            name="Signal Monitor",
+            name="টিপি/এসএল ট্র্যাকার (প্রতি ১ মিনিট)",
             replace_existing=True,
         )
 
-        # 3) News monitoring — every 30 minutes
+        # 3) Sudden Volatility Spike Watchdog — every 45 seconds
+        self.scheduler.add_job(
+            self.monitor_volatility,
+            IntervalTrigger(seconds=45),
+            id="volatility_monitor",
+            name="স্পাইক ওয়াচডগ (প্রতি ৪৫ সেকেন্ড)",
+            replace_existing=True,
+        )
+
+        # 4) News monitoring — every 3 minutes
         self.scheduler.add_job(
             self.monitor_news,
-            IntervalTrigger(minutes=30),
+            IntervalTrigger(minutes=3),
             id="news_monitor",
-            name="News Monitor",
+            name="আন্তর্জাতিক নিউজ ওয়াচডগ (প্রতি ৩ মিনিট)",
             replace_existing=True,
         )
 
-        # 4) Daily report — রাত ১২:০০ (Bangladesh time)
+        # 5) Daily report — রাত ১১:৫৯ মিনিটে (Bangladesh time)
         report_hour, report_min = DAILY_REPORT_TIME.split(":")
         self.scheduler.add_job(
             self.send_daily_report,
             CronTrigger(hour=int(report_hour), minute=int(report_min), timezone=TIMEZONE),
             id="daily_report",
-            name="Daily Report",
+            name="দৈনিক হিসাব রিপোর্ট (রাত ১১:৫৯)",
             replace_existing=True,
         )
 
-        # 5) Weekly report — Friday 5:30 PM (market close)
+        # 6) Weekly report — Friday 5:30 PM (market close)
         self.scheduler.add_job(
             self.send_weekly_report,
             CronTrigger(day_of_week="fri", hour=17, minute=30, timezone=TIMEZONE),
             id="weekly_report",
-            name="Weekly Report",
+            name="সাপ্তাহিক হিসাব রিপোর্ট (শুক্রবার ১৭:৩০)",
             replace_existing=True,
         )
 
         self.scheduler.start()
         self._running = True
-        logger.info("✅ Scheduler started with all jobs")
+        logger.info("✅ High-Speed Scheduler started with all watchdogs")
         logger.info(f"  📊 Signal check: every {SIGNAL_CHECK_INTERVAL} min")
-        logger.info(f"  🔍 Signal monitor: every 3 min")
-        logger.info(f"  📰 News monitor: every 30 min")
+        logger.info(f"  🔍 TP/SL monitor: every 1 min")
+        logger.info(f"  ⚡ Volatility spike watchdog: every 45 sec")
+        logger.info(f"  📰 News watchdog: every 3 min")
         logger.info(f"  📋 Daily report: {DAILY_REPORT_TIME} ({TIMEZONE})")
         logger.info(f"  📅 Weekly report: Friday 17:30 ({TIMEZONE})")
 

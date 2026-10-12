@@ -22,12 +22,14 @@ class NewsAnalyzer:
     """গোল্ড মার্কেট-সংক্রান্ত নিউজ এনালাইসিস করে"""
 
     HIGH_IMPACT_KEYWORDS = [
-        "war", "attack", "military", "nuclear", "missile", "bomb",
-        "sanctions", "invasion", "conflict", "crisis", "explosion",
-        "Federal Reserve", "Fed rate", "rate hike", "rate cut", "FOMC",
+        "war", "attack", "military", "nuclear", "missile", "bomb", "strike",
+        "sanctions", "invasion", "conflict", "crisis", "explosion", "ceasefire",
+        "Middle East", "Israel", "Iran", "Gaza", "Lebanon", "Russia", "Ukraine",
+        "Taiwan", "China", "US China", "trade war", "tariff",
+        "Federal Reserve", "Fed rate", "rate hike", "rate cut", "FOMC", "Powell",
         "CPI", "inflation", "NFP", "non-farm", "GDP", "recession",
-        "dollar collapse", "debt ceiling", "default",
-        "China gold", "central bank gold", "gold reserves",
+        "dollar collapse", "debt ceiling", "default", "Treasury yield",
+        "China gold", "central bank gold", "gold reserves", "safe haven",
     ]
 
     BULLISH_KEYWORDS = [

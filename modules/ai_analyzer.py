@@ -22,18 +22,15 @@ Always provide precise, actionable trading signals with clear entry, TP, and SL 
 Be concise, accurate, and professional. Always consider risk management.
 Respond in a structured JSON-compatible format."""
 
-    CANDIDATE_MODELS = [
-        "gemini-3.5-flash-lite",
-        "gemini-3.8-flash",
-        "gemini-3.5-flash",
-    ]
-
     def __init__(self, api_key: str):
         if api_key:
             genai.configure(api_key=api_key)
-            self.api_key = api_key
+            self.model = genai.GenerativeModel(
+                "gemini-3.8-flash",
+                system_instruction=self.SYSTEM_PROMPT,
+            )
             self.available = True
-            logger.info("Gemini AI initialized with multi-model auto-failover")
+            logger.info("Gemini AI initialized successfully")
         else:
             self.available = False
             logger.warning("No Gemini API key — AI analysis disabled")
@@ -55,28 +52,19 @@ Respond in a structured JSON-compatible format."""
         if not self.available:
             return self._fallback_analysis(current_price, technical_data, news_sentiment)
 
-        prompt = self._build_prompt(
-            current_price, technical_data, news_sentiment,
-            correlated_assets, timeframe
-        )
-
-        # Try models in order (auto-failover on quota limit)
-        for model_name in self.CANDIDATE_MODELS:
-            try:
-                model = genai.GenerativeModel(
-                    model_name,
-                    system_instruction=self.SYSTEM_PROMPT,
-                )
-                response = model.generate_content(prompt)
-                ai_text = response.text
-                parsed = self._parse_ai_response(ai_text, current_price, technical_data)
-                logger.info(f"AI Analysis ({model_name}) complete: {parsed.get('direction')} | Confidence: {parsed.get('confidence')}%")
-                return parsed
-            except Exception as e:
-                logger.warning(f"Gemini model {model_name} failed: {e}")
-
-        logger.error("All Gemini candidate models failed, switching to fallback")
-        return self._fallback_analysis(current_price, technical_data, news_sentiment)
+        try:
+            prompt = self._build_prompt(
+                current_price, technical_data, news_sentiment,
+                correlated_assets, timeframe
+            )
+            response  = self.model.generate_content(prompt)
+            ai_text   = response.text
+            parsed    = self._parse_ai_response(ai_text, current_price, technical_data)
+            logger.info(f"AI Analysis complete: {parsed.get('direction')} | Confidence: {parsed.get('confidence')}%")
+            return parsed
+        except Exception as e:
+            logger.error(f"Gemini AI error: {e}")
+            return self._fallback_analysis(current_price, technical_data, news_sentiment)
 
     def _build_prompt(self, price, tech, news, corr, tf) -> str:
         """AI-এর জন্য বিস্তারিত প্রম্পট তৈরি করে"""
@@ -140,19 +128,11 @@ Analyze XAUUSD (Gold) market and provide a trading signal.
   - {key_news}
 
 ## Your Task
-Provide a complete trading analysis with:
-1. SIGNAL: BUY / SELL / NEUTRAL
-2. CONFIDENCE: 0-100%
-3. ENTRY PRICE: Exact entry level
-4. TP1: First target
-5. TP2: Second target
-6. TP3: Extended target (optional)
-7. SL: Stop loss level
-8. RISK_REWARD: R:R ratio
-9. REASONING: 3-4 key reasons for the signal
-10. RISK_LEVEL: LOW / MEDIUM / HIGH
-11. TIMEFRAME_VALIDITY: How long the signal is valid
-12. WARNINGS: Any important warnings or cautions
+Provide a complete trading analysis.
+IMPORTANT LANGUAGE REQUIREMENT:
+- Keep SIGNAL strictly as [BUY/SELL/NEUTRAL].
+- Keep numeric numbers (ENTRY, TP1, TP2, TP3, SL, R_R) as numbers.
+- Provide all REASONING (কারণ ও যুক্তি) and WARNINGS (সতর্কতা) strictly in natural, professional BENGALI (বাংলা ভাষায়).
 
 Format your response EXACTLY like this:
 SIGNAL: [BUY/SELL/NEUTRAL]
@@ -163,15 +143,15 @@ TP2: [price]
 TP3: [price]
 SL: [price]
 R_R: [ratio like 1:2.5]
-RISK: [LOW/MEDIUM/HIGH]
-VALIDITY: [timeframe]
+RISK: [কম/মাঝারি/উচ্চ]
+VALIDITY: [মেয়াদ যেমন ৪-৮ ঘণ্টা]
 REASONING:
-- [reason 1]
-- [reason 2]
-- [reason 3]
+- [বাংলায় কারণ ১ - যেমন: আরএসআই ওভারসোল্ড জোন থেকে বাউন্স করেছে]
+- [বাংলায় কারণ ২ - যেমন: ভূরাজনৈতিক উত্তেজনায় ডলার দুর্বল হচ্ছে]
+- [বাংলায় কারণ ৩ - যেমন: প্রাইস গুরুত্বপূর্ণ ২০০-ইএমএ সাপোর্টের উপরে আছে]
 WARNINGS:
-- [warning 1]
-- [warning 2]
+- [বাংলায় সতর্কতা ১ - যেমন: আসন্ন মার্কিন সিপিআই নিউজের দিকে নজর রাখুন]
+- [বাংলায় সতর্কতা ২ - যেমন: প্রতি ট্রেডে ২% এর বেশি ঝুঁকি নেবেন না]
 """
         return prompt
 
@@ -339,59 +319,57 @@ WARNINGS:
     # News Impact Analysis (AI-powered)
     # ─────────────────────────────────────────────────────────
     def analyze_news_impact(self, news_title: str, current_price: float) -> str:
-        """একটি নির্দিষ্ট নিউজের গোল্ড মার্কেটে প্রভাব বিশ্লেষণ করে"""
+        """একটি নির্দিষ্ট নিউজের গোল্ড মার্কেটে প্রভাব বাংলায় বিশ্লেষণ করে"""
         if not self.available:
-            return "AI analysis not available."
+            return "এআই বিশ্লেষণ এই মুহূর্তে প্রস্তুত নয়।"
 
         try:
             prompt = f"""
-You are a gold market expert. Analyze the impact of this news on XAUUSD (Gold) price:
+You are an expert XAUUSD (Gold) commodities trader and market analyst.
+Analyze the impact of this breaking news on XAUUSD (Gold) price.
+Provide your response strictly in natural, professional BENGALI (বাংলা ভাষায়):
 
 News: "{news_title}"
 Current Gold Price: ${current_price}
 
-Provide a brief analysis (2-3 sentences) covering:
-1. Direction of impact (BULLISH/BEARISH/NEUTRAL)
-2. Expected price movement (in dollars)
-3. Urgency level (HIGH/MEDIUM/LOW)
-4. Recommended action for traders
-
-Keep it concise and actionable.
+Provide a concise analysis in Bengali using this exact layout:
+• <b>অভিমুখ (Impact Direction):</b> [বুলিশ (দাম বাড়ার সম্ভাবনা 🟢) / বেয়ারিশ (দাম কমার সম্ভাবনা 🔴) / নিরপেক্ষ ⚪]
+• <b>প্রত্যাশিত প্রভাব:</b> [আনুমানিক ৫-২০ ডলার বা কত মুভমেন্ট হতে পারে]
+• <b>জরুরি মাত্রা:</b> [উচ্চ ঝুঁকি / মাঝারি / সাধারণ]
+• <b>ট্রেডারদের প্রতি পরামর্শ:</b> [বাংলায় ১-২ লাইনে ট্রেডারদের কি করণীয় তা বলুন]
 """
             response = self.model.generate_content(prompt)
             return response.text.strip()
         except Exception as e:
             logger.error(f"News impact analysis error: {e}")
-            return "Could not analyze news impact."
+            return "নিউজ প্রভাব বিশ্লেষণ করা সম্ভব হয়নি।"
 
     # ─────────────────────────────────────────────────────────
-    # Generate Weekly Summary (AI-powered)
+    # Generate Weekly Summary (AI-powered in Bengali)
     # ─────────────────────────────────────────────────────────
     def generate_weekly_summary(self, signals_data: list, win_rate: float) -> str:
-        """সাপ্তাহিক সিগনাল পারফরম্যান্স সারাংশ তৈরি করে"""
+        """সাপ্তাহিক সিগনাল পারফরম্যান্স সারাংশ বাংলায় তৈরি করে"""
         if not self.available or not signals_data:
-            return "Weekly summary not available."
+            return "সাপ্তাহিক এআই পর্যালোচনা এই মুহূর্তে প্রস্তুত নয়।"
 
         try:
             prompt = f"""
-As a gold trading system AI, generate a professional weekly performance summary:
+As a gold trading system AI, generate a professional weekly performance summary in BENGALI (বাংলা ভাষায়):
 
 Performance Data:
 - Total Signals: {len(signals_data)}
 - Win Rate: {win_rate:.1f}%
 - Signals data: {signals_data[:10]}
 
-Create a concise weekly summary covering:
-1. Overall performance assessment
-2. Best performing signal
-3. What factors drove the market this week
-4. Next week's outlook for gold
-5. Key levels to watch
+Create a concise weekly summary in BENGALI covering:
+১. পুরো সপ্তাহের পারফরম্যান্স মূল্যায়ন
+২. এই সপ্তাহে গোল্ড মার্কেট কোন কোন ফ্যাক্টরে (যুদ্ধ, ডলার, ফেড) চালিত হয়েছে
+৩. আগামী সপ্তাহের গোল্ডের সম্ভাবনাময় গতিপথ ও গুরুত্বপূর্ণ লেভেল
 
-Keep it professional and under 300 words. Use emojis appropriately.
+Keep it professional, encouraging, and under 250 words in natural Bengali with appropriate emojis.
 """
             response = self.model.generate_content(prompt)
             return response.text.strip()
         except Exception as e:
             logger.error(f"Weekly summary error: {e}")
-            return "Weekly summary generation failed."
+            return "সাপ্তাহিক রিপোর্ট তৈরি করা সম্ভব হয়নি।"
