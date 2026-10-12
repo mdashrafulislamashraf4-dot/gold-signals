@@ -10,7 +10,11 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+
+try:
+    import pandas_ta as ta
+except Exception:
+    ta = None
 
 logger = logging.getLogger(__name__)
 
@@ -38,72 +42,124 @@ class TechnicalAnalyzer:
             low   = df["Low"]
             vol   = df.get("Volume", pd.Series([0] * len(df), index=df.index))
 
-            # ── Trend Indicators ──────────────────────────────
-            df["EMA_20"]  = ta.ema(close, length=20)
-            df["EMA_50"]  = ta.ema(close, length=50)
-            df["EMA_200"] = ta.ema(close, length=200)
-            df["SMA_20"]  = ta.sma(close, length=20)
+            if ta is not None:
+                # ── Trend Indicators ──────────────────────────────
+                df["EMA_20"]  = ta.ema(close, length=20)
+                df["EMA_50"]  = ta.ema(close, length=50)
+                df["EMA_200"] = ta.ema(close, length=200)
+                df["SMA_20"]  = ta.sma(close, length=20)
 
-            # ── MACD ──────────────────────────────────────────
-            macd = ta.macd(close, fast=12, slow=26, signal=9)
-            if macd is not None and not macd.empty:
-                df["MACD"]        = macd.iloc[:, 0]
-                df["MACD_Signal"] = macd.iloc[:, 2]
-                df["MACD_Hist"]   = macd.iloc[:, 1]
+                # ── MACD ──────────────────────────────────────────
+                macd = ta.macd(close, fast=12, slow=26, signal=9)
+                if macd is not None and not macd.empty:
+                    df["MACD"]        = macd.iloc[:, 0]
+                    df["MACD_Signal"] = macd.iloc[:, 2]
+                    df["MACD_Hist"]   = macd.iloc[:, 1]
 
-            # ── RSI ───────────────────────────────────────────
-            df["RSI"] = ta.rsi(close, length=14)
+                # ── RSI ───────────────────────────────────────────
+                df["RSI"] = ta.rsi(close, length=14)
 
-            # ── Bollinger Bands ───────────────────────────────
-            bbands = ta.bbands(close, length=20, std=2)
-            if bbands is not None and not bbands.empty:
-                df["BB_Upper"]  = bbands.iloc[:, 0]
-                df["BB_Mid"]    = bbands.iloc[:, 1]
-                df["BB_Lower"]  = bbands.iloc[:, 2]
-                df["BB_Width"]  = bbands.iloc[:, 3]
-                df["BB_Pct"]    = bbands.iloc[:, 4]
+                # ── Bollinger Bands ───────────────────────────────
+                bbands = ta.bbands(close, length=20, std=2)
+                if bbands is not None and not bbands.empty:
+                    df["BB_Upper"]  = bbands.iloc[:, 0]
+                    df["BB_Mid"]    = bbands.iloc[:, 1]
+                    df["BB_Lower"]  = bbands.iloc[:, 2]
+                    df["BB_Width"]  = bbands.iloc[:, 3]
+                    df["BB_Pct"]    = bbands.iloc[:, 4]
+                # ── Stochastic ────────────────────────────────────
+                stoch = ta.stoch(high, low, close, k=14, d=3)
+                if stoch is not None and not stoch.empty:
+                    df["STOCH_K"] = stoch.iloc[:, 0]
+                    df["STOCH_D"] = stoch.iloc[:, 1]
 
-            # ── Stochastic ────────────────────────────────────
-            stoch = ta.stoch(high, low, close, k=14, d=3)
-            if stoch is not None and not stoch.empty:
-                df["STOCH_K"] = stoch.iloc[:, 0]
-                df["STOCH_D"] = stoch.iloc[:, 1]
+                # ── ATR (Stop Loss calculation) ───────────────────
+                df["ATR"] = ta.atr(high, low, close, length=14)
 
-            # ── ATR (Stop Loss calculation) ───────────────────
-            df["ATR"] = ta.atr(high, low, close, length=14)
+                # ── ADX (Trend Strength) ──────────────────────────
+                adx = ta.adx(high, low, close, length=14)
+                if adx is not None and not adx.empty:
+                    df["ADX"]    = adx.iloc[:, 0]
+                    df["DI_POS"] = adx.iloc[:, 1]
+                    df["DI_NEG"] = adx.iloc[:, 2]
 
-            # ── ADX (Trend Strength) ──────────────────────────
-            adx = ta.adx(high, low, close, length=14)
-            if adx is not None and not adx.empty:
-                df["ADX"]    = adx.iloc[:, 0]
-                df["DI_POS"] = adx.iloc[:, 1]
-                df["DI_NEG"] = adx.iloc[:, 2]
+                # ── Williams %R ───────────────────────────────────
+                df["WILLR"] = ta.willr(high, low, close, length=14)
 
-            # ── Williams %R ───────────────────────────────────
-            df["WILLR"] = ta.willr(high, low, close, length=14)
+                # ── CCI ───────────────────────────────────────────
+                df["CCI"] = ta.cci(high, low, close, length=20)
 
-            # ── CCI ───────────────────────────────────────────
-            df["CCI"] = ta.cci(high, low, close, length=20)
+                # ── Ichimoku Cloud ────────────────────────────────
+                ichimoku = ta.ichimoku(high, low, close)
+                if ichimoku is not None and len(ichimoku) >= 2:
+                    ichi_df = ichimoku[0]
+                    if ichi_df is not None and not ichi_df.empty:
+                        df["ICH_CONV"]  = ichi_df.iloc[:, 0]  # Tenkan-sen
+                        df["ICH_BASE"]  = ichi_df.iloc[:, 1]  # Kijun-sen
+                        df["ICH_SPA"]   = ichi_df.iloc[:, 2]  # Span A
+                        df["ICH_SPB"]   = ichi_df.iloc[:, 3]  # Span B
 
-            # ── Ichimoku Cloud ────────────────────────────────
-            ichimoku = ta.ichimoku(high, low, close)
-            if ichimoku is not None and len(ichimoku) >= 2:
-                ichi_df = ichimoku[0]
-                if ichi_df is not None and not ichi_df.empty:
-                    df["ICH_CONV"]  = ichi_df.iloc[:, 0]  # Tenkan-sen
-                    df["ICH_BASE"]  = ichi_df.iloc[:, 1]  # Kijun-sen
-                    df["ICH_SPA"]   = ichi_df.iloc[:, 2]  # Span A
-                    df["ICH_SPB"]   = ichi_df.iloc[:, 3]  # Span B
+                # ── VWAP ─────────────────────────────────────────
+                try:
+                    df["VWAP"] = ta.vwap(high, low, close, vol)
+                except Exception:
+                    pass
 
-            # ── VWAP ─────────────────────────────────────────
-            try:
-                df["VWAP"] = ta.vwap(high, low, close, vol)
-            except Exception:
-                pass
+                # ── Momentum ─────────────────────────────────────
+                df["MOM"] = ta.mom(close, length=10)
+                df["ROC"] = ta.roc(close, length=10)
+            else:
+                # ── Pure Pandas Fallback ──────────────────────────
+                df["EMA_20"]  = close.ewm(span=20, adjust=False).mean()
+                df["EMA_50"]  = close.ewm(span=50, adjust=False).mean()
+                df["EMA_200"] = close.ewm(span=200, adjust=False).mean()
+                df["SMA_20"]  = close.rolling(window=20).mean()
 
-            # ── Momentum ─────────────────────────────────────
-            df["MOM"] = ta.mom(close, length=10)
-            df["ROC"] = ta.roc(close, length=10)
+                ema12 = close.ewm(span=12, adjust=False).mean()
+                ema26 = close.ewm(span=26, adjust=False).mean()
+                df["MACD"]        = ema12 - ema26
+                df["MACD_Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+                df["MACD_Hist"]   = df["MACD"] - df["MACD_Signal"]
+
+                delta = close.diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                rs = gain / (loss.replace(0, 1e-9))
+                df["RSI"] = 100 - (100 / (1 + rs))
+
+                sma = close.rolling(window=20).mean()
+                std = close.rolling(window=20).std()
+                df["BB_Upper"] = sma + (std * 2)
+                df["BB_Mid"]   = sma
+                df["BB_Lower"] = sma - (std * 2)
+                df["BB_Width"] = (df["BB_Upper"] - df["BB_Lower"]) / sma
+                df["BB_Pct"]   = (close - df["BB_Lower"]) / (df["BB_Upper"] - df["BB_Lower"] + 1e-9)
+
+                # Stochastic
+                low14 = low.rolling(14).min()
+                high14 = high.rolling(14).max()
+                k = 100 * ((close - low14) / (high14 - low14 + 1e-9))
+                df["STOCH_K"] = k
+                df["STOCH_D"] = k.rolling(3).mean()
+
+                # ATR
+                tr1 = high - low
+                tr2 = (high - close.shift(1)).abs()
+                tr3 = (low - close.shift(1)).abs()
+                tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                df["ATR"] = tr.rolling(14).mean()
+
+                # Williams %R
+                df["WILLR"] = ((high14 - close) / (high14 - low14 + 1e-9)) * -100
+
+                # Momentum / ROC
+                df["MOM"] = close.diff(10)
+                df["ROC"] = close.pct_change(10) * 100
+
+                # VWAP fallback
+                typical_price = (high + low + close) / 3
+                vol_sum = vol.cumsum().replace(0, 1)
+                df["VWAP"] = (typical_price * vol).cumsum() / vol_sum
 
         except Exception as e:
             logger.error(f"Indicator calculation error: {e}")
