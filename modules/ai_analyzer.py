@@ -22,18 +22,36 @@ Always provide precise, actionable trading signals with clear entry, TP, and SL 
 Be concise, accurate, and professional. Always consider risk management.
 Respond in a structured JSON-compatible format."""
 
+    MODELS = [
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-3.8-flash",
+    ]
+
     def __init__(self, api_key: str):
         if api_key:
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel(
-                "gemini-3.8-flash",
-                system_instruction=self.SYSTEM_PROMPT,
-            )
             self.available = True
-            logger.info("Gemini AI initialized successfully")
+            logger.info("Gemini AI initialized with multi-model fallback")
         else:
             self.available = False
             logger.warning("No Gemini API key — AI analysis disabled")
+
+    def _generate(self, prompt: str, system_prompt: str = None) -> Optional[str]:
+        """একাধিক মডেল ট্রাই করে যাতে কোটা শেষ না হয়"""
+        if not self.available:
+            return None
+        sys_inst = system_prompt or self.SYSTEM_PROMPT
+        for model_name in self.MODELS:
+            try:
+                m = genai.GenerativeModel(model_name, system_instruction=sys_inst)
+                res = m.generate_content(prompt)
+                if res and res.text:
+                    return res.text.strip()
+            except Exception as e:
+                logger.warning(f"Model {model_name} quota/error: {e}")
+        return None
 
     # ─────────────────────────────────────────────────────────
     # Full Market Analysis
@@ -57,11 +75,13 @@ Respond in a structured JSON-compatible format."""
                 current_price, technical_data, news_sentiment,
                 correlated_assets, timeframe
             )
-            response  = self.model.generate_content(prompt)
-            ai_text   = response.text
-            parsed    = self._parse_ai_response(ai_text, current_price, technical_data)
-            logger.info(f"AI Analysis complete: {parsed.get('direction')} | Confidence: {parsed.get('confidence')}%")
-            return parsed
+            ai_text = self._generate(prompt)
+            if ai_text:
+                parsed = self._parse_ai_response(ai_text, current_price, technical_data)
+                logger.info(f"AI Analysis complete: {parsed.get('direction')} | Confidence: {parsed.get('confidence')}%")
+                return parsed
+            else:
+                return self._fallback_analysis(current_price, technical_data, news_sentiment)
         except Exception as e:
             logger.error(f"Gemini AI error: {e}")
             return self._fallback_analysis(current_price, technical_data, news_sentiment)
@@ -338,8 +358,8 @@ Provide a concise analysis in Bengali using this exact layout:
 • <b>জরুরি মাত্রা:</b> [উচ্চ ঝুঁকি / মাঝারি / সাধারণ]
 • <b>ট্রেডারদের প্রতি পরামর্শ:</b> [বাংলায় ১-২ লাইনে ট্রেডারদের কি করণীয় তা বলুন]
 """
-            response = self.model.generate_content(prompt)
-            return response.text.strip()
+            ai_text = self._generate(prompt)
+            return ai_text if ai_text else "নিউজ প্রভাব বিশ্লেষণ করা সম্ভব হয়নি।"
         except Exception as e:
             logger.error(f"News impact analysis error: {e}")
             return "নিউজ প্রভাব বিশ্লেষণ করা সম্ভব হয়নি।"
@@ -368,8 +388,8 @@ Create a concise weekly summary in BENGALI covering:
 
 Keep it professional, encouraging, and under 250 words in natural Bengali with appropriate emojis.
 """
-            response = self.model.generate_content(prompt)
-            return response.text.strip()
+            ai_text = self._generate(prompt)
+            return ai_text if ai_text else "সাপ্তাহিক রিপোর্ট তৈরি করা সম্ভব হয়নি।"
         except Exception as e:
             logger.error(f"Weekly summary error: {e}")
             return "সাপ্তাহিক রিপোর্ট তৈরি করা সম্ভব হয়নি।"
