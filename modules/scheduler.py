@@ -262,7 +262,7 @@ class TaskScheduler:
             self.run_analysis,
             IntervalTrigger(minutes=SIGNAL_CHECK_INTERVAL),
             id="signal_analysis",
-            name="সিগনাল এনালাইসিস (প্রতি ১৫ মিনিট)",
+            name=f"সিগনাল এনালাইসিস (প্রতি {SIGNAL_CHECK_INTERVAL} মিনিট)",
             replace_existing=True,
         )
 
