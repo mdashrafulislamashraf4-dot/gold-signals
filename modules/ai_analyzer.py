@@ -22,15 +22,18 @@ Always provide precise, actionable trading signals with clear entry, TP, and SL 
 Be concise, accurate, and professional. Always consider risk management.
 Respond in a structured JSON-compatible format."""
 
+    CANDIDATE_MODELS = [
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+    ]
+
     def __init__(self, api_key: str):
         if api_key:
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel(
-                "gemini-3.8-flash",
-                system_instruction=self.SYSTEM_PROMPT,
-            )
+            self.api_key = api_key
             self.available = True
-            logger.info("Gemini AI initialized successfully")
+            logger.info("Gemini AI initialized with multi-model auto-failover")
         else:
             self.available = False
             logger.warning("No Gemini API key — AI analysis disabled")
@@ -52,19 +55,28 @@ Respond in a structured JSON-compatible format."""
         if not self.available:
             return self._fallback_analysis(current_price, technical_data, news_sentiment)
 
-        try:
-            prompt = self._build_prompt(
-                current_price, technical_data, news_sentiment,
-                correlated_assets, timeframe
-            )
-            response  = self.model.generate_content(prompt)
-            ai_text   = response.text
-            parsed    = self._parse_ai_response(ai_text, current_price, technical_data)
-            logger.info(f"AI Analysis complete: {parsed.get('direction')} | Confidence: {parsed.get('confidence')}%")
-            return parsed
-        except Exception as e:
-            logger.error(f"Gemini AI error: {e}")
-            return self._fallback_analysis(current_price, technical_data, news_sentiment)
+        prompt = self._build_prompt(
+            current_price, technical_data, news_sentiment,
+            correlated_assets, timeframe
+        )
+
+        # Try models in order (auto-failover on quota limit)
+        for model_name in self.CANDIDATE_MODELS:
+            try:
+                model = genai.GenerativeModel(
+                    model_name,
+                    system_instruction=self.SYSTEM_PROMPT,
+                )
+                response = model.generate_content(prompt)
+                ai_text = response.text
+                parsed = self._parse_ai_response(ai_text, current_price, technical_data)
+                logger.info(f"AI Analysis ({model_name}) complete: {parsed.get('direction')} | Confidence: {parsed.get('confidence')}%")
+                return parsed
+            except Exception as e:
+                logger.warning(f"Gemini model {model_name} failed: {e}")
+
+        logger.error("All Gemini candidate models failed, switching to fallback")
+        return self._fallback_analysis(current_price, technical_data, news_sentiment)
 
     def _build_prompt(self, price, tech, news, corr, tf) -> str:
         """AI-এর জন্য বিস্তারিত প্রম্পট তৈরি করে"""
