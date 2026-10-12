@@ -40,6 +40,13 @@ class TaskScheduler:
         self._last_news_sent  = set()
         self._running         = False
 
+        # ── Real-Time Continuous Watcher (Zero Waiting Barrier) ──
+        self._price_history      = []   # [(timestamp, price)]
+        self._last_full_scan     = 0    # last full analysis timestamp
+        self._last_flash_alert   = 0    # last flash volatility alert
+        self._notified_breakeven = set() # signal IDs notified for breakeven
+        self._realtime_thread    = None
+
     # ─────────────────────────────────────────────────────────
     # Core Analysis Task
     # ─────────────────────────────────────────────────────────
@@ -209,15 +216,112 @@ class TaskScheduler:
             logger.error(f"Weekly report error: {e}")
 
     # ─────────────────────────────────────────────────────────
+    # Real-Time Continuous Watcher Loop (Zero-Delay Monitoring)
+    # ─────────────────────────────────────────────────────────
+    def _realtime_loop(self):
+        """
+        অবিরাম রিয়েল-টাইম মনিটরিং (কোনো টাইমের বাধা নেই):
+        ১. প্রতি ৫ সেকেন্ডে লাইভ স্পট দাম ট্র্যাক করে
+        ২. রিয়েলটাইমে TP/SL এবং Breakeven (ঝুঁকিমুক্ত) চেক করে
+        ৩. হঠাৎ কোনো তীব্র মুভমেন্ট/স্পাইক হলে সাথে সাথে অ্যালার্ট দেয়
+        ৪. বড় মুভমেন্ট হলে সাথে সাথে রি-এনালাইসিস করে সিগনাল পাঠায়
+        """
+        logger.info("⚡ Real-Time Continuous Market Watcher active (Scanning every 5 sec)")
+        import sqlite3
+        from config import DB_PATH
+
+        while self._running:
+            try:
+                now_ts = time.time()
+                cur_price = self.md.get_current_price()
+
+                if cur_price and cur_price > 0:
+                    # 1. Update rolling price history (last 120 seconds)
+                    self._price_history.append((now_ts, cur_price))
+                    self._price_history = [
+                        (t, p) for (t, p) in self._price_history if now_ts - t <= 120
+                    ]
+
+                    # 2. Check Active Signals for TP / SL / Breakeven
+                    self._check_realtime_active_signals(cur_price)
+
+                    # 3. Flash Volatility / Momentum Spike Detection (>= $3.00 movement)
+                    if len(self._price_history) >= 2:
+                        oldest_p = self._price_history[0][1]
+                        price_diff = round(cur_price - oldest_p, 2)
+                        elapsed = int(now_ts - self._price_history[0][0])
+                        if abs(price_diff) >= 3.0 and (now_ts - self._last_flash_alert > 300):
+                            alert_msg = self.bot.format_volatility_alert(cur_price, price_diff, elapsed)
+                            self.bot.send_message(alert_msg)
+                            self._last_flash_alert = now_ts
+                            # Trigger immediate full analysis due to high volatility
+                            threading.Thread(target=self.run_analysis, kwargs={"send_regardless": False}, daemon=True).start()
+
+                    # 4. Continuous background scan (runs every 90 seconds or when triggered)
+                    if now_ts - self._last_full_scan >= 90:
+                        self._last_full_scan = now_ts
+                        threading.Thread(target=self.run_analysis, daemon=True).start()
+
+            except Exception as e:
+                logger.error(f"Realtime loop error: {e}")
+
+            time.sleep(5)
+
+    def _check_realtime_active_signals(self, cur_price: float):
+        """সক্রিয় ট্রেডের TP/SL এবং Breakeven রিয়েলটাইমে পরীক্ষা করে"""
+        import sqlite3
+        from config import DB_PATH
+
+        try:
+            # 1. Check TP / SL hits
+            alerts = self.se.check_active_signals(cur_price)
+            for alert in alerts:
+                self.bot.send_tp_sl_alert(alert["type"], alert["signal"], alert["price"])
+                logger.info(f"⚡ Instant hit: {alert['type']} at {alert['price']}")
+
+            # 2. Check for Breakeven (+15 pips / +$1.50 profit)
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT * FROM signals WHERE status='ACTIVE'").fetchall()
+
+            for r in rows:
+                s = dict(r)
+                sid = s["id"]
+                if sid in self._notified_breakeven:
+                    continue
+
+                direction = s["direction"]
+                entry = s.get("entry_price", 0)
+                if not entry:
+                    continue
+
+                profit_usd = (cur_price - entry) if direction == "BUY" else (entry - cur_price)
+                # If trade is in profit by $1.50+ (15 pips)
+                if profit_usd >= 1.50:
+                    msg = self.bot.format_breakeven_alert(s, cur_price, profit_usd)
+                    self.bot.send_message(msg)
+                    self._notified_breakeven.add(sid)
+                    logger.info(f"🛡️ Breakeven alert sent for signal #{sid} (+{profit_usd:.2f})")
+
+        except Exception as e:
+            logger.error(f"Realtime active signal check error: {e}")
+
+    # ─────────────────────────────────────────────────────────
     # Start All Scheduled Jobs
     # ─────────────────────────────────────────────────────────
     def start(self):
-        """সব শিডিউল জব শুরু করে"""
+        """সব শিডিউল জব ও রিয়েল-টাইম থ্রেড শুরু করে"""
         if self._running:
             logger.warning("Scheduler already running")
             return
 
-        # 1) Main signal analysis — every N minutes
+        self._running = True
+
+        # Launch real-time 5-second continuous watcher thread
+        self._realtime_thread = threading.Thread(target=self._realtime_loop, daemon=True)
+        self._realtime_thread.start()
+
+        # 1) Main signal analysis fallback — every N minutes
         self.scheduler.add_job(
             self.run_analysis,
             IntervalTrigger(minutes=SIGNAL_CHECK_INTERVAL),

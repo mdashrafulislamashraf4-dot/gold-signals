@@ -19,6 +19,17 @@ class TelegramBot:
 
     BASE_URL = "https://api.telegram.org/bot{token}/{method}"
 
+    DEFAULT_KEYBOARD = {
+        "keyboard": [
+            [{"text": "🎯 লাইভ সিগনাল"}, {"text": "💰 গোল্ড লাইভ দাম"}],
+            [{"text": "🔍 এআই ডিপ এনালাইসিস"}, {"text": "📈 কী লেভেল (S/R)"}],
+            [{"text": "📰 জরুরি নিউজ আপডেট"}, {"text": "📅 ইকোনমিক ক্যালেন্ডার"}],
+            [{"text": "📊 আজকের ট্রেড রিপোর্ট"}, {"text": "⚙️ সিস্টেম স্ট্যাটাস"}]
+        ],
+        "resize_keyboard": True,
+        "is_persistent": True
+    }
+
     def __init__(self, token: str, chat_ids: list):
         self.token    = token
         self.chat_ids = chat_ids if isinstance(chat_ids, list) else [chat_ids]
@@ -27,10 +38,11 @@ class TelegramBot:
     # Core Send Methods
     # ─────────────────────────────────────────────────────────
     def send_message(self, text: str, chat_id: str = None, parse_mode: str = "HTML",
-                     disable_preview: bool = True) -> bool:
-        """টেলিগ্রামে মেসেজ পাঠায়"""
+                     disable_preview: bool = True, reply_markup: dict = None) -> bool:
+        """টেলিগ্রামে মেসেজ পাঠায় (ডিফল্ট কাস্টম বাটন সহ)"""
         targets = [chat_id] if chat_id else self.chat_ids
         success = True
+        markup = reply_markup if reply_markup is not None else self.DEFAULT_KEYBOARD
 
         for cid in targets:
             try:
@@ -40,6 +52,7 @@ class TelegramBot:
                     "text":                     text,
                     "parse_mode":               parse_mode,
                     "disable_web_page_preview": disable_preview,
+                    "reply_markup":             markup,
                 }
                 resp = requests.post(url, json=payload, timeout=30)
                 if not resp.ok:
@@ -392,26 +405,26 @@ Performance: {performance_emoji}
         return self.send_message(msg)
 
     def send_startup_message(self) -> bool:
-        msg = """🚀 <b>AI GOLD SIGNAL SYSTEM STARTED</b>
+        msg = """🚀 <b>AI GOLD ADVANCED SIGNAL PRO ACTIVATED</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ System is now ACTIVE
-📊 Monitoring: XAUUSD (Gold)
-🤖 AI Engine: Gemini AI
-📰 News Monitor: Active
-⏰ Signal Check: Every 15 min
+✅ <b>সিস্টেম এখন ১০০% লাইভ ও সক্রিয়!</b>
+📊 <b>মনিটরিং পেয়ার:</b> XAUUSD (Spot Gold)
+🤖 <b>এআই ইঞ্জিন:</b> Gemini 3.8 Flash (High Accuracy)
+⚡ <b>মনিটরিং মোড:</b> <b>অবিরাম রিয়েল-টাইম (Zero-Delay 24/7)</b>
+🏦 <b>স্ট্র্যাটেজি:</b> Technicals + Smart Money Concepts (SMC) + News
 
-<b>Available Commands:</b>
-/signal — Latest signal
-/price — Current gold price
-/news — Latest news
-/analysis — Full analysis
-/calendar — Economic events
-/report — Today's report
-/status — System status
-/help — All commands
+📱 <b>নিচে দেওয়া বড় বাটনগুলোতে ক্লিক করে সহজেই ব্যবহার করুন:</b>
+• 🎯 <b>লাইভ সিগনাল</b> — বর্তমান ট্রেড সিগনাল
+• 💰 <b>গোল্ড লাইভ দাম</b> — TradingView লাইভ দাম
+• 🔍 <b>এআই ডিপ এনালাইসিস</b> — সম্পূর্ণ টেকনিক্যাল ও ক্যান্ডেলস্টিক
+• 📈 <b>কী লেভেল (S/R)</b> — সাপোর্ট, রেজিস্ট্যান্স ও অর্ডার ব্লক
+• 📰 <b>জরুরি নিউজ আপডেট</b> — আন্তর্জাতিক ভূরাজনৈতিক খবর
+• 📅 <b>ইকোনমিক ক্যালেন্ডার</b> — আজকের গুরুত্বপূর্ণ ইভেন্ট
+• 📊 <b>আজকের ট্রেড রিপোর্ট</b> — আজকের লাভ-লস হিসাব
+• ⚙️ <b>সিস্টেম স্ট্যাটাস</b> — বটের লাইভ অবস্থা
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-💡 <i>System will send signals 24/7 when opportunities arise!</i>"""
+💡 <i>কোনো সময়ের বাধা নেই — মার্কেট মুভ করলেই ইনস্ট্যান্ট অ্যালার্ট পাবেন!</i>"""
         return self.send_message(msg)
 
     # ─────────────────────────────────────────────────────────
@@ -437,3 +450,91 @@ Performance: {performance_emoji}
 
         msg += "━━━━━━━━━━━━━━━━━━━━━━━━━\n🔴 High Impact | 🟡 Medium | 🟢 Low"
         return msg
+
+    # ─────────────────────────────────────────────────────────
+    # Key Levels & SMC Formatter
+    # ─────────────────────────────────────────────────────────
+    def format_key_levels(self, price: float, key_levels: dict, smc: dict = None) -> str:
+        """কী লেভেল ও SMC অর্ডার ব্লক ফরম্যাট করে"""
+        pivot = key_levels.get("pivot", "N/A")
+        sup = ", ".join(f"<code>{s}</code>" for s in key_levels.get("support", [])[:4]) or "N/A"
+        res = ", ".join(f"<code>{r}</code>" for r in key_levels.get("resistance", [])[:4]) or "N/A"
+
+        smc_text = ""
+        if smc:
+            obs = smc.get("order_blocks", [])[:3]
+            fvgs = smc.get("fvg", [])[:2]
+            sweeps = smc.get("liquidity_sweeps", [])[:2]
+
+            if obs:
+                smc_text += "\n🏦 <b>Institutional Order Blocks:</b>\n"
+                for ob in obs:
+                    smc_text += f"  • {ob.get('desc')}\n"
+
+            if fvgs:
+                smc_text += "\n⚡ <b>Fair Value Gaps (FVG):</b>\n"
+                for f in fvgs:
+                    smc_text += f"  • {f.get('desc')}\n"
+
+            if sweeps:
+                smc_text += "\n🩸 <b>Recent Liquidity Sweeps:</b>\n"
+                for sw in sweeps:
+                    smc_text += f"  • {sw.get('desc')}\n"
+
+        msg = f"""📈 <b>XAUUSD KEY PRICE LEVELS & SMC</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 <b>Current Price:</b> <code>${price}</code>
+⚖️ <b>Daily Pivot:</b> <code>${pivot}</code>
+
+🔴 <b>Major Resistance (Sell Zones):</b>
+  {res}
+
+🟢 <b>Major Support (Buy Zones):</b>
+  {sup}
+{smc_text}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 <i>Smart Money Concepts & Key Reaction Levels</i>"""
+        return msg
+
+    # ─────────────────────────────────────────────────────────
+    # Volatility / Momentum Flash Alert
+    # ─────────────────────────────────────────────────────────
+    def format_volatility_alert(self, price: float, change: float, time_sec: int) -> str:
+        """হঠাৎ তীব্র মুভমেন্ট হলে অ্যালার্ট পাঠায়"""
+        direction = "উর্ধমুখী (RALLY 🚀)" if change > 0 else "নিম্নমুখী (DUMP 🔻)"
+        emoji = "🚀" if change > 0 else "🔻"
+
+        return f"""⚡ <b>REAL-TIME VOLATILITY SPIKE ALERT</b> ⚡
+━━━━━━━━━━━━━━━━━━━━━━━━━
+{emoji} গোল্ড মার্কেটে হঠাৎ তীব্র মুভমেন্ট দেখা গেছে!
+
+💰 <b>বর্তমান দাম:</b> <code>${price}</code>
+📊 <b>পরিবর্তন:</b> <b>{change:+.2f} USD</b> ({time_sec} সেকেন্ডে)
+🧭 <b>গতিপ্রকৃতি:</b> <b>{direction}</b>
+
+⚠️ <i>সতর্কতা: বড় ভোলাটিলিটি চলছে। হাই-লেভারেজ পজিশনে স্টপ লস নিশ্চিত করুন!</i>
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 <i>AI Gold Real-Time Monitor</i>"""
+
+    # ─────────────────────────────────────────────────────────
+    # Breakeven Alert
+    # ─────────────────────────────────────────────────────────
+    def format_breakeven_alert(self, signal: dict, current_price: float, profit_usd: float) -> str:
+        """ট্রেড ভালো প্রফিটে আসলে Breakeven অ্যালার্ট পাঠায়"""
+        direction = signal.get("direction", "")
+        entry = signal.get("entry_price", signal.get("entry", 0))
+
+        return f"""🛡️ <b>RISK FREE / BREAKEVEN ALERT</b> 🛡️
+━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ আপনার <b>{direction}</b> পজিশন এখন <b>+{profit_usd:.2f} USD</b> প্রফিটে আছে!
+
+💰 এন্ট্রি ছিল: <code>${entry}</code>
+📍 বর্তমান দাম: <code>${current_price}</code>
+
+🎯 <b>পরামর্শ:</b>
+১. কিছু আংশিক প্রফিট (Partial TP) বুক করতে পারেন।
+২. আপনার <b>Stop Loss (SL)</b> এন্ট্রি পয়েন্ট <code>${entry}</code>-তে নামিয়ে/তুলে আনুন (Breakeven)।
+৩. এতে এই ট্রেডে আর কোনো লস হওয়ার ঝুঁকি থাকবে না!
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 <i>AI Gold Risk Protection Engine</i>"""
+

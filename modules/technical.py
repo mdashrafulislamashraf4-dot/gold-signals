@@ -208,6 +208,121 @@ class TechnicalAnalyzer:
         return levels
 
     # ─────────────────────────────────────────────────────────
+    # Smart Money Concepts (SMC) Analysis
+    # ─────────────────────────────────────────────────────────
+    def detect_smart_money(self, df: pd.DataFrame) -> dict:
+        """
+        Smart Money Concepts (SMC) এনালাইসিস:
+        • Order Blocks (OB)
+        • Fair Value Gaps (FVG)
+        • Liquidity Sweeps
+        • Break of Structure (BOS)
+        """
+        smc = {
+            "order_blocks": [],
+            "fvg": [],
+            "liquidity_sweeps": [],
+            "structure": "NEUTRAL",
+            "smc_score": 50
+        }
+        if df is None or len(df) < 10:
+            return smc
+
+        o = df["Open"].values
+        h = df["High"].values
+        l = df["Low"].values
+        c = df["Close"].values
+        n = len(c)
+
+        bullish_smc = 0
+        bearish_smc = 0
+
+        # 1. Fair Value Gap (FVG) Detection (Last 10 candles)
+        for i in range(n - 10, n - 1):
+            if i >= 2:
+                # Bullish FVG: Low of candle i > High of candle i-2
+                if l[i] > h[i-2] and (l[i] - h[i-2]) > 0.5:
+                    fvg_size = round(l[i] - h[i-2], 2)
+                    smc["fvg"].append({
+                        "type": "BULLISH_FVG",
+                        "top": round(l[i], 2),
+                        "bottom": round(h[i-2], 2),
+                        "size": fvg_size,
+                        "desc": f"🟢 Bullish FVG ({round(h[i-2],2)} - {round(l[i],2)})"
+                    })
+                    bullish_smc += 1
+                # Bearish FVG: High of candle i < Low of candle i-2
+                elif h[i] < l[i-2] and (l[i-2] - h[i]) > 0.5:
+                    fvg_size = round(l[i-2] - h[i], 2)
+                    smc["fvg"].append({
+                        "type": "BEARISH_FVG",
+                        "top": round(l[i-2], 2),
+                        "bottom": round(h[i], 2),
+                        "size": fvg_size,
+                        "desc": f"🔴 Bearish FVG ({round(h[i],2)} - {round(l[i-2],2)})"
+                    })
+                    bearish_smc += 1
+
+        # 2. Order Blocks (OB) Detection
+        for i in range(n - 15, n - 2):
+            if i >= 1:
+                body_next = abs(c[i+1] - o[i+1])
+                # Bullish OB: Bearish candle followed by strong bullish displacement
+                if c[i] < o[i] and c[i+1] > o[i+1] and body_next > abs(c[i] - o[i]) * 1.8:
+                    smc["order_blocks"].append({
+                        "type": "BULLISH_OB",
+                        "zone_high": round(h[i], 2),
+                        "zone_low": round(l[i], 2),
+                        "desc": f"🟢 Bullish Demand OB @ {round(l[i],2)}-{round(h[i],2)}"
+                    })
+                    bullish_smc += 1
+                # Bearish OB: Bullish candle followed by strong bearish displacement
+                elif c[i] > o[i] and c[i+1] < o[i+1] and body_next > abs(c[i] - o[i]) * 1.8:
+                    smc["order_blocks"].append({
+                        "type": "BEARISH_OB",
+                        "zone_high": round(h[i], 2),
+                        "zone_low": round(l[i], 2),
+                        "desc": f"🔴 Bearish Supply OB @ {round(l[i],2)}-{round(h[i],2)}"
+                    })
+                    bearish_smc += 1
+
+        # 3. Liquidity Sweep Detection (Turtle Soup / Stop Hunt)
+        lookback = 20
+        recent_high = max(h[max(0, n - lookback - 1) : n - 2])
+        recent_low  = min(l[max(0, n - lookback - 1) : n - 2])
+
+        # Sweep High: Current candle spiked above recent high but closed back below (Sell setup)
+        if h[-1] > recent_high and c[-1] < recent_high:
+            smc["liquidity_sweeps"].append({
+                "type": "BUY_SIDE_LIQUIDITY_SWEPT",
+                "level": round(recent_high, 2),
+                "desc": f"🩸 Buy-side Liquidity Swept @ {round(recent_high,2)} (Bearish Reversal)"
+            })
+            bearish_smc += 2
+
+        # Sweep Low: Current candle spiked below recent low but closed back above (Buy setup)
+        if l[-1] < recent_low and c[-1] > recent_low:
+            smc["liquidity_sweeps"].append({
+                "type": "SELL_SIDE_LIQUIDITY_SWEPT",
+                "level": round(recent_low, 2),
+                "desc": f"🩸 Sell-side Liquidity Swept @ {round(recent_low,2)} (Bullish Reversal)"
+            })
+            bullish_smc += 2
+
+        # SMC Structure & Scoring
+        total = bullish_smc + bearish_smc
+        if total > 0:
+            smc["smc_score"] = int((bullish_smc / total) * 100)
+            if smc["smc_score"] >= 60:
+                smc["structure"] = "BULLISH_ORDER_FLOW"
+            elif smc["smc_score"] <= 40:
+                smc["structure"] = "BEARISH_ORDER_FLOW"
+            else:
+                smc["structure"] = "EQUILIBRIUM"
+
+        return smc
+
+    # ─────────────────────────────────────────────────────────
     # Generate Technical Score
     # ─────────────────────────────────────────────────────────
     def get_technical_score(self, df: pd.DataFrame) -> dict:
@@ -339,6 +454,19 @@ class TechnicalAnalyzer:
             elif close < ich_conv and close < ich_base:
                 sell_signals.append("Price below Ichimoku cloud → Bearish")
 
+        # ── Smart Money Concepts (SMC) ────────────────────────
+        smc = self.detect_smart_money(df)
+        if smc.get("structure") == "BULLISH_ORDER_FLOW":
+            buy_signals.append("SMC: Bullish Order Flow (Institutional buying)")
+        elif smc.get("structure") == "BEARISH_ORDER_FLOW":
+            sell_signals.append("SMC: Bearish Order Flow (Institutional selling)")
+
+        for sweep in smc.get("liquidity_sweeps", []):
+            if sweep["type"] == "SELL_SIDE_LIQUIDITY_SWEPT":
+                buy_signals.append(f"SMC: {sweep['desc']}")
+            else:
+                sell_signals.append(f"SMC: {sweep['desc']}")
+
         # ── Calculate Final Score ─────────────────────────────
         total    = len(buy_signals) + len(sell_signals)
         if total == 0:
@@ -369,4 +497,5 @@ class TechnicalAnalyzer:
             "details":     details,
             "patterns":    self.detect_patterns(df),
             "fibonacci":   self.fibonacci_levels(df),
+            "smc":         smc,
         }

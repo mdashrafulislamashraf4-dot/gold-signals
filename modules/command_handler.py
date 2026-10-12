@@ -76,11 +76,22 @@ class CommandHandler:
             logger.error(f"getUpdates error: {e}")
         return []
 
+    BUTTON_MAP = {
+        "🎯 লাইভ সিগনাল": "/signal",
+        "💰 গোল্ড লাইভ দাম": "/price",
+        "🔍 এআই ডিপ এনালাইসিস": "/analysis",
+        "📈 কী লেভেল (S/R)": "/levels",
+        "📰 জরুরি নিউজ আপডেট": "/news",
+        "📅 ইকোনমিক ক্যালেন্ডার": "/calendar",
+        "📊 আজকের ট্রেড রিপোর্ট": "/report",
+        "⚙️ সিস্টেম স্ট্যাটাস": "/status",
+    }
+
     # ─────────────────────────────────────────────────────────
     # Process Update
     # ─────────────────────────────────────────────────────────
     def _process_update(self, update: dict):
-        """একটি টেলিগ্রাম আপডেট প্রসেস করে"""
+        """একটি টেলিগ্রাম আপডেট প্রসেস করে (বাটন ক্লিক ও কমান্ড উভয়ই)"""
         message = update.get("message", {})
         if not message:
             return
@@ -88,7 +99,15 @@ class CommandHandler:
         chat_id = str(message.get("chat", {}).get("id", ""))
         text    = message.get("text", "").strip()
 
-        if not text or not text.startswith("/"):
+        if not text:
+            return
+
+        # Map button text if tapped
+        if text in self.BUTTON_MAP:
+            cmd = self.BUTTON_MAP[text]
+        elif text.startswith("/"):
+            cmd = text.split()[0].lower().replace(f"@", "").split("@")[0]
+        else:
             return
 
         # Security check — only allow configured chat IDs
@@ -98,14 +117,14 @@ class CommandHandler:
             )
             return
 
-        cmd = text.split()[0].lower().replace(f"@", "").split("@")[0]
-        logger.info(f"Command received: {cmd} from {chat_id}")
+        logger.info(f"Command/Button triggered: {cmd} from {chat_id}")
 
         handlers = {
             "/signal":   self._cmd_signal,
             "/price":    self._cmd_price,
             "/news":     self._cmd_news,
             "/analysis": self._cmd_analysis,
+            "/levels":   self._cmd_levels,
             "/calendar": self._cmd_calendar,
             "/report":   self._cmd_report,
             "/weekly":   self._cmd_weekly,
@@ -118,6 +137,18 @@ class CommandHandler:
         threading.Thread(
             target=handler, args=(chat_id,), daemon=True
         ).start()
+
+    def _cmd_levels(self, chat_id: str):
+        """/levels — কী লেভেল ও SMC অর্ডার ব্লক দেখতে"""
+        try:
+            price = self.md.get_current_price() or 0
+            df = self.md.get_ohlcv(timeframe="1h", bars=200)
+            key_levels = self.md.get_key_levels(df)
+            smc = self.ta.detect_smart_money(df)
+            msg = self.bot.format_key_levels(price, key_levels, smc)
+            self.bot.send_message(msg, chat_id=chat_id)
+        except Exception as e:
+            self.bot.send_message(f"❌ Error fetching levels: {e}", chat_id=chat_id)
 
     # ─────────────────────────────────────────────────────────
     # Command Handlers
