@@ -156,6 +156,26 @@ class TechnicalAnalyzer:
                 df["MOM"] = close.diff(10)
                 df["ROC"] = close.pct_change(10) * 100
 
+                # Ichimoku fallback
+                high9 = high.rolling(9).max()
+                low9 = low.rolling(9).min()
+                df["ICH_CONV"] = (high9 + low9) / 2
+
+                high26 = high.rolling(26).max()
+                low26 = low.rolling(26).min()
+                df["ICH_BASE"] = (high26 + low26) / 2
+
+                # ADX fallback
+                up_move = high.diff()
+                down_move = -low.diff()
+                plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+                minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+                tr_smooth = tr.rolling(14).mean().replace(0, 1e-9)
+                df["DI_POS"] = (pd.Series(plus_dm, index=df.index).rolling(14).mean() / tr_smooth) * 100
+                df["DI_NEG"] = (pd.Series(minus_dm, index=df.index).rolling(14).mean() / tr_smooth) * 100
+                dx = (abs(df["DI_POS"] - df["DI_NEG"]) / (df["DI_POS"] + df["DI_NEG"] + 1e-9)) * 100
+                df["ADX"] = dx.rolling(14).mean()
+
                 # VWAP fallback
                 typical_price = (high + low + close) / 3
                 vol_sum = vol.cumsum().replace(0, 1)
@@ -285,53 +305,53 @@ class TechnicalAnalyzer:
 
         # ── RSI ───────────────────────────────────────────────
         rsi = last.get("RSI", np.nan)
-        if not np.isnan(rsi):
+        if not pd.isna(rsi):
             details["RSI"] = round(rsi, 1)
             if rsi < 30:
                 buy_signals.append(f"RSI {rsi:.0f} → ওভারসোল্ড জোন (BUY সাপোর্ট)")
             elif rsi > 70:
                 sell_signals.append(f"RSI {rsi:.0f} → ওভারবট জোন (SELL প্রেসার)")
+            elif rsi > 50:
+                buy_signals.append(f"RSI {rsi:.0f} → বুলিশ মোমেন্টাম জোন")
             elif rsi < 50:
-                buy_signals.append(f"RSI {rsi:.0f} → বুলিশ জোনে প্রবেশ")
-            else:
-                sell_signals.append(f"RSI {rsi:.0f} → বেয়ারিশ জোনে প্রবেশ")
+                sell_signals.append(f"RSI {rsi:.0f} → বেয়ারিশ মোমেন্টাম জোন")
 
         # ── MACD ──────────────────────────────────────────────
         macd   = last.get("MACD", np.nan)
         macd_s = last.get("MACD_Signal", np.nan)
         macd_h = last.get("MACD_Hist", np.nan)
-        if not (np.isnan(macd) or np.isnan(macd_s)):
+        if not (pd.isna(macd) or pd.isna(macd_s)):
             details["MACD"] = round(macd, 2)
             if macd > macd_s:
                 buy_signals.append("MACD → বুলিশ ক্রসওভার (ঊর্ধ্বমুখী মোমেন্টাম)")
             else:
                 sell_signals.append("MACD → বেয়ারিশ ক্রসওভার (নিম্নমুখী মোমেন্টাম)")
-            if not np.isnan(macd_h) and macd_h > 0:
+            if not pd.isna(macd_h) and macd_h > 0:
                 buy_signals.append("MACD হিস্টোগ্রাম → পজিটিভ গতিধারা")
-            elif not np.isnan(macd_h):
+            elif not pd.isna(macd_h):
                 sell_signals.append("MACD হিস্টোগ্রাম → নেগেটিভ গতিধারা")
 
         # ── EMA Trend ─────────────────────────────────────────
         ema20  = last.get("EMA_20", np.nan)
         ema50  = last.get("EMA_50", np.nan)
         ema200 = last.get("EMA_200", np.nan)
-        if not np.isnan(ema20):
+        if not pd.isna(ema20):
             details["EMA_20"]  = round(ema20, 2)
-            details["EMA_50"]  = round(ema50, 2) if not np.isnan(ema50) else "N/A"
-            details["EMA_200"] = round(ema200, 2) if not np.isnan(ema200) else "N/A"
+            details["EMA_50"]  = round(ema50, 2) if not pd.isna(ema50) else "N/A"
+            details["EMA_200"] = round(ema200, 2) if not pd.isna(ema200) else "N/A"
 
             if close > ema20:
                 buy_signals.append("প্রাইস EMA20-এর উপরে (স্বল্পমেয়াদী বুলিশ)")
             else:
                 sell_signals.append("প্রাইস EMA20-এর নিচে (স্বল্পমেয়াদী বেয়ারিশ)")
 
-            if not np.isnan(ema50):
+            if not pd.isna(ema50):
                 if ema20 > ema50:
                     buy_signals.append("EMA20 > EMA50 → গোল্ডেন ক্রস তৈরি হয়েছে")
                 else:
                     sell_signals.append("EMA20 < EMA50 → ডেথ ক্রস তৈরি হয়েছে")
 
-            if not np.isnan(ema200):
+            if not pd.isna(ema200):
                 if close > ema200:
                     buy_signals.append("প্রাইস EMA200-এর উপরে → দীর্ঘমেয়াদী বুলিশ আপট্রেন্ড")
                 else:
@@ -341,45 +361,45 @@ class TechnicalAnalyzer:
         bb_up  = last.get("BB_Upper", np.nan)
         bb_low = last.get("BB_Lower", np.nan)
         bb_pct = last.get("BB_Pct", np.nan)
-        if not np.isnan(bb_up):
+        if not pd.isna(bb_up):
             details["BB_Upper"] = round(bb_up, 2)
             details["BB_Lower"] = round(bb_low, 2)
             if close < bb_low:
                 buy_signals.append("বলিঙ্গার ব্যান্ডের নিচে → বাউন্স ব্যাকের তীব্র সম্ভাবনা")
             elif close > bb_up:
                 sell_signals.append("বলিঙ্গার ব্যান্ডের উপরে → রিভার্সালের সম্ভাবনা")
-            elif not np.isnan(bb_pct) and bb_pct < 0.2:
+            elif not pd.isna(bb_pct) and bb_pct < 0.2:
                 buy_signals.append("বলিঙ্গার লোয়ার ব্যান্ড সংলগ্ন → BUY সাপোর্ট জোন")
 
         # ── Stochastic ────────────────────────────────────────
         stk = last.get("STOCH_K", np.nan)
         std = last.get("STOCH_D", np.nan)
-        if not np.isnan(stk):
+        if not pd.isna(stk):
             details["Stochastic_K"] = round(stk, 1)
             if stk < 20 and std < 20:
                 buy_signals.append(f"স্টোকাস্টিক {stk:.0f} → ওভারসোল্ড জোন")
             elif stk > 80 and std > 80:
                 sell_signals.append(f"স্টোকাস্টিক {stk:.0f} → ওভারবট জোন")
-            if not np.isnan(std) and stk > std:
+            if not pd.isna(std) and stk > std:
                 buy_signals.append("স্টোকাস্টিক K > D → বুলিশ সিগনাল")
-            elif not np.isnan(std):
+            elif not pd.isna(std):
                 sell_signals.append("স্টোকাস্টিক K < D → বেয়ারিশ সিগনাল")
 
         # ── ADX Trend Strength ────────────────────────────────
         adx    = last.get("ADX", np.nan)
         di_pos = last.get("DI_POS", np.nan)
         di_neg = last.get("DI_NEG", np.nan)
-        if not np.isnan(adx):
+        if not pd.isna(adx):
             details["ADX"] = round(adx, 1)
             if adx > 25:
-                if not np.isnan(di_pos) and di_pos > di_neg:
+                if not pd.isna(di_pos) and di_pos > di_neg:
                     buy_signals.append(f"ADX {adx:.0f} → শক্তিশালী আপট্রেন্ড (+DI > -DI)")
-                elif not np.isnan(di_neg):
+                elif not pd.isna(di_neg):
                     sell_signals.append(f"ADX {adx:.0f} → শক্তিশালী ডাউনট্রেন্ড (-DI > +DI)")
 
         # ── Williams %R ───────────────────────────────────────
         willr = last.get("WILLR", np.nan)
-        if not np.isnan(willr):
+        if not pd.isna(willr):
             details["Williams_R"] = round(willr, 1)
             if willr < -80:
                 buy_signals.append(f"উইলিয়ামস %R {willr:.0f} → ওভারসোল্ড")
@@ -389,7 +409,7 @@ class TechnicalAnalyzer:
         # ── Ichimoku ──────────────────────────────────────────
         ich_conv = last.get("ICH_CONV", np.nan)
         ich_base = last.get("ICH_BASE", np.nan)
-        if not (np.isnan(ich_conv) or np.isnan(ich_base)):
+        if not (pd.isna(ich_conv) or pd.isna(ich_base)):
             if close > ich_conv and close > ich_base:
                 buy_signals.append("প্রাইস ইচিমোকু ক্লাউডের উপরে → স্পষ্ট বুলিশ")
             elif close < ich_conv and close < ich_base:
@@ -414,7 +434,7 @@ class TechnicalAnalyzer:
 
         # ── ATR for SL/TP ─────────────────────────────────────
         atr = last.get("ATR", np.nan)
-        if not np.isnan(atr):
+        if not pd.isna(atr):
             details["ATR"] = round(atr, 2)
 
         return {

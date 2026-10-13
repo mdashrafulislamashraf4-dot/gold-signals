@@ -8,7 +8,7 @@
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import pandas as pd
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class MarketDataFetcher:
     """গোল্ড মার্কেটের সব ধরনের ডেটা ফেচ করে"""
 
-    GOLD_SYMBOLS = ["GC=F", "XAUUSD=X", "GLD"]
+    GOLD_SYMBOLS = ["GC=F", "XAUUSD=X"]
     CORRELATED   = {
         "DXY":  "DX-Y.NYB",   # US Dollar Index
         "SPX":  "^GSPC",      # S&P 500
@@ -124,6 +124,17 @@ class MarketDataFetcher:
                     df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
                     df = df.rename(columns=str.capitalize)
                     df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+
+                    # Resample to 4H candles if requested
+                    if timeframe.lower() == "4h":
+                        df = df.resample("4h").agg({
+                            "Open": "first",
+                            "High": "max",
+                            "Low": "min",
+                            "Close": "last",
+                            "Volume": "sum",
+                        }).dropna()
+
                     df = df.tail(bars)
 
                     # Align with Spot Price if using futures data
@@ -172,7 +183,7 @@ class MarketDataFetcher:
     # ─────────────────────────────────────────────────────────
     def is_market_open(self) -> bool:
         """Gold futures market খোলা কি না চেক করে"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         weekday = now.weekday()  # 0=Mon, 6=Sun
 
         # Gold trades Sunday 6PM – Friday 5PM ET (approx)
@@ -201,10 +212,11 @@ class MarketDataFetcher:
         lows   = df["Low"].values
         closes = df["Close"].values
 
-        # Pivot Points (Classic)
-        last_high  = highs[-1]
-        last_low   = lows[-1]
-        last_close = closes[-1]
+        # Pivot Points based on completed candle
+        idx = -2 if len(highs) >= 2 else -1
+        last_high  = highs[idx]
+        last_low   = lows[idx]
+        last_close = closes[idx]
 
         pivot = (last_high + last_low + last_close) / 3
         r1    = 2 * pivot - last_low
@@ -224,8 +236,12 @@ class MarketDataFetcher:
             if lows[i] == min(lows[i - window : i + window + 1]):
                 swing_lows.append(round(lows[i], 2))
 
+        cur_price = closes[-1]
+        all_res = sorted(set([round(r1, 2), round(r2, 2), round(r3, 2)] + swing_highs[-3:]))
+        all_sup = sorted(set([round(s1, 2), round(s2, 2), round(s3, 2)] + swing_lows[-3:]), reverse=True)
+
         return {
             "pivot":      round(pivot, 2),
-            "resistance": sorted(set([round(r1,2), round(r2,2), round(r3,2)] + swing_highs[-3:]), reverse=True),
-            "support":    sorted(set([round(s1,2), round(s2,2), round(s3,2)] + swing_lows[-3:]), reverse=True),
+            "resistance": all_res,
+            "support":    all_sup,
         }

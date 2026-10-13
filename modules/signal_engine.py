@@ -41,6 +41,8 @@ class SignalEngine:
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
         with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS signals (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -254,16 +256,25 @@ class SignalEngine:
             logger.error(f"DB TP1 update error: {e}")
 
     def close_signal(self, signal_id: int, result: str, close_price: float, tp_hit: int = 0, sl_hit: int = 0):
-        """সিগনাল সম্পন্ন হলে বা বন্ধ হলে স্ট্যাটাস CLOSED করে"""
+        """সিগনাল সম্পন্ন হলে বা বন্ধ হলে স্ট্যাটাস CLOSED করে এবং PnL হিসাব করে"""
         try:
             with sqlite3.connect(DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute("SELECT direction, entry_price FROM signals WHERE id=?", (signal_id,)).fetchone()
+                pnl_pips = 0.0
+                if row:
+                    entry = row["entry_price"] or close_price
+                    direction = row["direction"]
+                    diff = (close_price - entry) if direction == "BUY" else (entry - close_price)
+                    pnl_pips = round(diff * 10, 1)  # 1 USD move = 10 pips in XAUUSD
+
                 conn.execute("""
                     UPDATE signals
-                    SET result=?, close_price=?, tp_hit=?, sl_hit=?, status='CLOSED'
+                    SET result=?, close_price=?, tp_hit=?, sl_hit=?, pnl_pips=?, status='CLOSED'
                     WHERE id=?
-                """, (result, close_price, tp_hit, sl_hit, signal_id))
+                """, (result, close_price, tp_hit, sl_hit, pnl_pips, signal_id))
                 conn.commit()
-            logger.info(f"Signal #{signal_id} CLOSED with result: {result} at {close_price}")
+            logger.info(f"Signal #{signal_id} CLOSED with result: {result} at {close_price} (PnL: {pnl_pips} pips)")
         except Exception as e:
             logger.error(f"DB close signal error: {e}")
 
@@ -271,17 +282,26 @@ class SignalEngine:
         """Backward compatibility wrapper for close_signal"""
         self.close_signal(signal_id, result, close_price, tp_hit, sl_hit)
 
-    def cleanup_ghost_signals(self):
-        """পূর্বে জমে থাকা সব অপ্রয়োজনীয় সক্রিয় সিগনাল বন্ধ করে"""
+    def cleanup_ghost_signals(self, max_hours: int = 12):
+        """পূর্বে জমে থাকা ১২ ঘণ্টার বেশি পুরনো সক্রিয় সিগনাল স্বয়ংক্রিয়ভাবে বন্ধ করে (রিসেন্ট ট্রেড সুরক্ষিত রাখে)"""
         try:
+            tz = pytz.timezone(TIMEZONE)
+            now = datetime.now(tz)
             with sqlite3.connect(DB_PATH) as conn:
-                conn.execute("""
-                    UPDATE signals
-                    SET status='CLOSED', result='EXPIRED'
-                    WHERE status='ACTIVE'
-                """)
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT id, timestamp FROM signals WHERE status='ACTIVE'").fetchall()
+                expired = 0
+                for r in rows:
+                    try:
+                        sig_time = datetime.fromisoformat(r["timestamp"])
+                        if (now - sig_time).total_seconds() > max_hours * 3600:
+                            conn.execute("UPDATE signals SET status='CLOSED', result='EXPIRED' WHERE id=?", (r["id"],))
+                            expired += 1
+                    except Exception:
+                        pass
                 conn.commit()
-            logger.info("Cleaned up ghost active signals")
+            if expired > 0:
+                logger.info(f"Cleaned up {expired} expired active signals (> {max_hours}h old)")
         except Exception as e:
             logger.error(f"Cleanup ghost signals error: {e}")
 
@@ -387,7 +407,7 @@ class SignalEngine:
                 sid = s["id"]
                 dir = s["direction"]
                 entry = s.get("entry_price", 0)
-                tp1, tp2, sl = s.get("tp1", 0), s.get("tp2", 0), s.get("sl", 0)
+                tp1, tp2, tp3, sl = s.get("tp1", 0), s.get("tp2", 0), s.get("tp3", 0), s.get("sl", 0)
                 tp_hit = s.get("tp_hit", 0)
 
                 # Timeout check: Auto-close signals older than 12 hours
@@ -401,13 +421,18 @@ class SignalEngine:
                     pass
 
                 if dir == "BUY":
+                    # TP3 check
+                    if tp3 and current_price >= tp3:
+                        self.close_signal(sid, result="TP3_HIT", close_price=current_price, tp_hit=3)
+                        alerts.append({"type": "TP3", "signal": s, "price": current_price})
                     # TP2 check
-                    if tp2 and current_price >= tp2:
+                    elif tp2 and current_price >= tp2 and tp_hit < 2:
                         self.close_signal(sid, result="TP2_HIT", close_price=current_price, tp_hit=2)
                         alerts.append({"type": "TP2", "signal": s, "price": current_price})
                     # TP1 check (only once if tp_hit < 1)
                     elif tp1 and current_price >= tp1 and tp_hit < 1:
-                        self.mark_tp1_hit(sid, current_price, breakeven_sl=entry)
+                        be_sl = round(entry + 0.30, 2)  # Spread buffer to protect profits
+                        self.mark_tp1_hit(sid, current_price, breakeven_sl=be_sl)
                         alerts.append({"type": "TP1", "signal": s, "price": current_price})
                     # Stop loss check
                     elif sl and current_price <= sl:
@@ -419,13 +444,18 @@ class SignalEngine:
                             alerts.append({"type": "SL", "signal": s, "price": current_price})
 
                 elif dir == "SELL":
+                    # TP3 check
+                    if tp3 and current_price <= tp3:
+                        self.close_signal(sid, result="TP3_HIT", close_price=current_price, tp_hit=3)
+                        alerts.append({"type": "TP3", "signal": s, "price": current_price})
                     # TP2 check
-                    if tp2 and current_price <= tp2:
+                    elif tp2 and current_price <= tp2 and tp_hit < 2:
                         self.close_signal(sid, result="TP2_HIT", close_price=current_price, tp_hit=2)
                         alerts.append({"type": "TP2", "signal": s, "price": current_price})
                     # TP1 check (only once if tp_hit < 1)
                     elif tp1 and current_price <= tp1 and tp_hit < 1:
-                        self.mark_tp1_hit(sid, current_price, breakeven_sl=entry)
+                        be_sl = round(entry - 0.30, 2)  # Spread buffer to protect profits
+                        self.mark_tp1_hit(sid, current_price, breakeven_sl=be_sl)
                         alerts.append({"type": "TP1", "signal": s, "price": current_price})
                     # Stop loss check
                     elif sl and current_price >= sl:

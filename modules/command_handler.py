@@ -133,6 +133,10 @@ class CommandHandler:
         else:
             lookup_key = text
 
+        if lookup_key == "/lot":
+            threading.Thread(target=self._cmd_lot, args=(chat_id, text), daemon=True).start()
+            return
+
         handler = handlers.get(lookup_key)
         if handler:
             logger.info(f"Triggered action: {lookup_key} from {chat_id}")
@@ -343,6 +347,52 @@ class CommandHandler:
     def _cmd_start(self, chat_id: str):
         """স্টার্ট কমান্ড"""
         self.bot.send_startup_message()
+
+    def _cmd_lot(self, chat_id: str, text: str = ""):
+        """💰 নির্ভুল গোল্ড লট সাইজ ক্যালকুলেটর"""
+        try:
+            parts = text.split()
+            balance = 1000.0
+            if len(parts) > 1:
+                try:
+                    balance = float(parts[1].replace("$", "").replace(",", ""))
+                except Exception:
+                    pass
+
+            # SL distance from active signal or default ATR (e.g. $10)
+            active_signals = self.se.get_active_signals()
+            sl_dist = 10.0
+            if active_signals:
+                cur = active_signals[0]
+                entry = cur.get("entry_price", 0)
+                sl = cur.get("sl", 0)
+                if entry and sl:
+                    sl_dist = max(1.0, abs(entry - sl))
+
+            risk_pct = 2.0  # 2% default risk
+            risk_usd = balance * (risk_pct / 100.0)
+            # 1 Standard Lot = 100 oz of Gold. Each $1 move = $100 per 1.00 lot
+            raw_lot = risk_usd / (sl_dist * 100)
+            rec_lot = max(0.01, round(raw_lot, 2))
+
+            msg = f"""💰 <b>গোল্ড (XAUUSD) লট সাইজ ক্যালকুলেটর</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💼 <b>অ্যাকাউন্ট ব্যালেন্স:</b> <code>${balance:,.2f}</code>
+⚠️ <b>নির্ধারিত ঝুঁকি (Risk):</b> <b>{risk_pct}% (${risk_usd:.2f})</b>
+🛑 <b>স্টপ লস দূরত্ব:</b> <code>${sl_dist:.2f}</code> ডলার
+
+🎯 <b>আপনার জন্য নিরাপদ লট সাইজ:</b>
+👉 <b><code>{rec_lot} Lot</code></b>
+
+💡 <b>ব্যবহারের নিয়ম:</b>
+যেকোনো ব্যালেন্সের জন্য সরাসরি লিখুন:
+<code>/lot [আপনার ব্যালেন্স]</code>
+(যেমন: <code>/lot 500</code> বা <code>/lot 2000</code>)
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🛡️ <i>সঠিক লট সাইজ ও মানি ম্যানেজমেন্টই আপনার মূলধনকে ১০০% নিরাপদ রাখবে!</i>"""
+            self.bot.send_message(msg, chat_id=chat_id)
+        except Exception as e:
+            self.bot.send_message(f"❌ লট সাইজ ক্যালকুলেশন এরর: {e}", chat_id=chat_id)
 
     def _cmd_unknown(self, chat_id: str):
         self.bot.send_message(

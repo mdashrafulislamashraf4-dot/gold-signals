@@ -9,7 +9,7 @@
 import logging
 import sqlite3
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import re
 
@@ -169,7 +169,7 @@ class NewsAnalyzer:
         if not api_key:
             return []
         try:
-            from_date = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+            from_date = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
             url = "https://newsapi.org/v2/everything"
             params = {
                 "q":          query,
@@ -287,17 +287,23 @@ class NewsAnalyzer:
                 key_events.append(article.get("title", "")[:100])
 
         total = bullish_count + bearish_count + neutral_count
-        if total == 0:
-            sentiment_score = 50
-        else:
-            sentiment_score = int((bullish_count / total) * 100)
+        directional_count = bullish_count + bearish_count
 
-        if sentiment_score >= 60:
-            direction = "BULLISH"
-        elif sentiment_score <= 40:
-            direction = "BEARISH"
-        else:
+        if directional_count == 0:
+            sentiment_score = 50
             direction = "NEUTRAL"
+        else:
+            # Scale sentiment score from 15 to 85 centered at 50
+            diff = bullish_count - bearish_count
+            sentiment_score = int(50 + (diff / directional_count) * 35)
+            sentiment_score = max(5, min(95, sentiment_score))
+
+            if sentiment_score >= 58:
+                direction = "BULLISH"
+            elif sentiment_score <= 42:
+                direction = "BEARISH"
+            else:
+                direction = "NEUTRAL"
 
         impact = "HIGH" if len(high_impact) >= 3 else ("MEDIUM" if len(high_impact) >= 1 else "LOW")
 
