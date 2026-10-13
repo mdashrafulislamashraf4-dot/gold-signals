@@ -130,6 +130,7 @@ class TaskScheduler:
                     signal["setup_type"] = "REVERSAL"
                     signal["active_ref"] = {
                         "id": opp_trade["id"],
+                        "daily_trade_num": opp_trade.get("daily_trade_num") or opp_trade.get("id", 1),
                         "direction": opp_trade["direction"],
                         "entry": opp_trade.get("entry_price", price),
                         "setup_note": "মার্কেট রিভার্সাল — বিপরীত ট্রেড ক্লোজ করে নতুন ট্রেন্ড এন্ট্রি",
@@ -191,6 +192,7 @@ class TaskScheduler:
                         signal["setup_type"] = "ADDITIONAL"
                         signal["active_ref"] = {
                             "id": cur_active["id"],
+                            "daily_trade_num": cur_active.get("daily_trade_num") or cur_active.get("id", 1),
                             "direction": cur_active["direction"],
                             "entry": entry_active,
                             "tp_hit": cur_active.get("tp_hit", 0),

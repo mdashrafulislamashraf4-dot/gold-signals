@@ -156,6 +156,7 @@ class CommandHandler:
             # যদি ইতিমধ্যে কোনো সিগনাল চালু থাকে, তবে তার লাইভ অগ্রগতি দেখাবে
             if active_signals:
                 cur_sig = active_signals[0]
+                trade_num = cur_sig.get("daily_trade_num") or cur_sig.get("id", 1)
                 direction = cur_sig.get("direction", "")
                 dir_icon = "🟢 BUY" if direction == "BUY" else "🔴 SELL"
                 tp1 = cur_sig.get("tp1")
@@ -164,24 +165,22 @@ class CommandHandler:
                 entry = cur_sig.get("entry_price", cur_sig.get("entry", 0))
                 tp_hit = cur_sig.get("tp_hit", 0)
 
-                status_text = "🎯 টার্গেট ১ সফলভাবে অর্জিত, টার্গেট ২-এর অপেক্ষায় (SL ব্রেকইভেনে)" if tp_hit == 1 else "চলমান ট্রেড (Active)"
+                status_text = "🎯 TP1 অর্জিত, TP2 এর অপেক্ষায় (SL ব্রেকইভেনে)" if tp_hit == 1 else "চলমান (Active)"
 
                 pnl = round(price - entry, 2) if direction == "BUY" else round(entry - price, 2)
-                pnl_icon = "💵 রানিং প্রফিট" if pnl >= 0 else "📉 রানিং ফ্লোটিং লস"
+                pnl_str = f"+${pnl}" if pnl >= 0 else f"-${abs(pnl)}"
 
-                msg = f"""🎯 <b>এই মুহূর্তে চলমান ট্রেডিং সিগনাল</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━
-⚡ সিগনাল: <b>{dir_icon}</b> (সিগনাল #{cur_sig.get('id', '')})
-💰 এন্ট্রি প্রাইস: <code>${entry}</code>
-📍 বর্তমান মার্কেট প্রাইস: <code>${price}</code>
-{pnl_icon}: <code>{abs(pnl)} USD</code>
-
-🎯 TP1 (টার্গেট ১): <code>${tp1}</code>
-🔥 TP2 (টার্গেট ২): <code>${tp2}</code>
-🛑 স্টপ লস (SL): <code>${sl}</code>
-📊 স্ট্যাটাস: <b>{status_text}</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━
-🔍 <i>এখন বর্তমান মার্কেট স্ক্যান করে দেখা হচ্ছে নতুন কোনো ভালো সেটাপ আছে কি না...</i>"""
+                msg = f"""🎯 <b>আজকের চলমান ট্রেড #{trade_num} (XAUUSD)</b>
+━━━━━━━━━━━━━━━━━
+⚡ <b>অ্যাকশন:</b> {dir_icon}
+💰 <b>এন্ট্রি:</b> <code>${entry}</code>
+📍 <b>লাইভ প্রাইস:</b> <code>${price}</code>
+💵 <b>ফ্লোটিং PnL:</b> <code>{pnl_str} USD</code>
+🎯 <b>TP1:</b> <code>${tp1}</code> | 🔥 <b>TP2:</b> <code>${tp2}</code>
+🛑 <b>স্টপ লস (SL):</b> <code>${sl}</code>
+📊 <b>অবস্থা:</b> <b>{status_text}</b>
+━━━━━━━━━━━━━━━━━
+🔍 <i>নতুন কোনো অতিরিক্ত সেটাপ আছে কি না মার্কেট স্ক্যান করা হচ্ছে...</i>"""
                 self.bot.send_message(msg, chat_id=chat_id)
 
                 # চলমান সিগনাল থাকলেও বর্তমান মার্কেট স্ক্যান করে নতুন সেটাপ আছে কি না পরীক্ষা করবে

@@ -45,28 +45,33 @@ class SignalEngine:
             conn.execute("PRAGMA synchronous=NORMAL;")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS signals (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp   TEXT    NOT NULL,
-                    direction   TEXT    NOT NULL,
-                    entry_price REAL,
-                    tp1         REAL,
-                    tp2         REAL,
-                    tp3         REAL,
-                    sl          REAL,
-                    confidence  INTEGER,
-                    tech_score  INTEGER,
-                    news_score  INTEGER,
-                    timeframe   TEXT,
-                    status      TEXT DEFAULT 'ACTIVE',
-                    result      TEXT DEFAULT 'PENDING',
-                    tp_hit      INTEGER DEFAULT 0,
-                    sl_hit      INTEGER DEFAULT 0,
-                    close_price REAL,
-                    pnl_pips    REAL,
-                    reasoning   TEXT,
-                    rr_ratio    TEXT
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    daily_trade_num INTEGER DEFAULT 1,
+                    timestamp       TEXT    NOT NULL,
+                    direction       TEXT    NOT NULL,
+                    entry_price     REAL,
+                    tp1             REAL,
+                    tp2             REAL,
+                    tp3             REAL,
+                    sl              REAL,
+                    confidence      INTEGER,
+                    tech_score      INTEGER,
+                    news_score      INTEGER,
+                    timeframe       TEXT,
+                    status          TEXT DEFAULT 'ACTIVE',
+                    result          TEXT DEFAULT 'PENDING',
+                    tp_hit          INTEGER DEFAULT 0,
+                    sl_hit          INTEGER DEFAULT 0,
+                    close_price     REAL,
+                    pnl_pips        REAL,
+                    reasoning       TEXT,
+                    rr_ratio        TEXT
                 )
             """)
+            try:
+                conn.execute("ALTER TABLE signals ADD COLUMN daily_trade_num INTEGER DEFAULT 1")
+            except Exception:
+                pass
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS news_alerts (
                     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -198,16 +203,25 @@ class SignalEngine:
     # Save & Update Signals in DB
     # ─────────────────────────────────────────────────────────
     def save_signal(self, signal: dict) -> int:
-        """সিগনাল টেলিগ্রামে পাঠানোর পর ডেটাবেসে ACTIVE হিসেবে সেভ করে"""
+        """সিগনাল টেলিগ্রামে পাঠানোর পর ডেটাবেসে ACTIVE হিসেবে সেভ করে (আজকের দিনের ট্রেড নম্বর সহ)"""
         try:
+            tz = pytz.timezone(TIMEZONE)
+            today_str = datetime.now(tz).strftime("%Y-%m-%d")
+
             with sqlite3.connect(DB_PATH) as conn:
-                cur = conn.execute("""
+                cur = conn.cursor()
+                row = cur.execute("SELECT COUNT(*) FROM signals WHERE timestamp LIKE ?", (f"{today_str}%",)).fetchone()
+                daily_num = (row[0] if row else 0) + 1
+                signal["daily_trade_num"] = daily_num
+
+                cur.execute("""
                     INSERT INTO signals
-                    (timestamp, direction, entry_price, tp1, tp2, tp3, sl,
+                    (daily_trade_num, timestamp, direction, entry_price, tp1, tp2, tp3, sl,
                      confidence, tech_score, news_score, timeframe, status, result,
                      tp_hit, sl_hit, reasoning, rr_ratio)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?, 'ACTIVE', 'PENDING', 0, 0, ?,?)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'ACTIVE', 'PENDING', 0, 0, ?,?)
                 """, (
+                    daily_num,
                     signal["timestamp"],
                     signal["direction"],
                     signal["entry"],

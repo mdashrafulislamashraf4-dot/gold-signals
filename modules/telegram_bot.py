@@ -101,118 +101,53 @@ class TelegramBot:
     # Signal Alert Format (বাংলায় + ট্রেডিং প্যারামিটার)
     # ─────────────────────────────────────────────────────────
     def format_signal_message(self, signal: dict, current_price: float = None) -> str:
-        """ট্রেডিং সিগনাল ফরম্যাট করে (BUY / SELL বাদে বাকি সব বিশ্লেষণ বাংলায়)"""
+        """ট্রেডিং সিগনাল সহজ ও পরিষ্কারভাবে বাংলায় ফরম্যাট করে (কাজের তথ্য ও আজকের ট্রেড নম্বর সহ)"""
         direction = signal.get("direction", "NEUTRAL")
         confidence = signal.get("confidence", 0)
+        trade_num = signal.get("daily_trade_num") or signal.get("id", 1)
 
         if direction == "BUY":
-            action_text = "🟢 BUY 📈 (কেনার উপযুক্ত সময়)"
-            arrow = "⬆️"
+            dir_text = "🟢 BUY (বাই)"
         elif direction == "SELL":
-            action_text = "🔴 SELL 📉 (বিক্রির উপযুক্ত সময়)"
-            arrow = "⬇️"
+            dir_text = "🔴 SELL (সেল)"
         else:
-            action_text = "⚪ NEUTRAL ↔️ (অপেক্ষা করুন)"
-            arrow = "↔️"
+            dir_text = "⚪ NEUTRAL"
 
         entry = signal.get("entry", 0)
         tp1   = signal.get("tp1", 0)
         tp2   = signal.get("tp2", 0)
         tp3   = signal.get("tp3", 0)
         sl    = signal.get("sl", 0)
-        rr    = signal.get("rr_ratio", "1:2")
         tf    = signal.get("timeframe", "H1")
-        risk  = signal.get("risk_level", "মাঝারি")
-        valid = signal.get("validity", "৪-৮ ঘণ্টা")
-
-        # Confidence bar
-        conf_bar = "█" * (confidence // 10) + "░" * (10 - confidence // 10)
-
-        # Reasoning (বাংলায়)
-        reasoning = signal.get("reasoning", [])
-        reason_text = ""
-        for i, r in enumerate(reasoning[:4], 1):
-            reason_text += f"  {i}. {r}\n"
-
-        # Warnings (বাংলায়)
-        warnings = signal.get("warnings", [])
-        warn_text = ""
-        for w in warnings[:2]:
-            warn_text += f"  ⚠️ {w}\n"
-
-        # Patterns (বাংলায়)
-        patterns = signal.get("patterns", [])
-        pattern_text = ""
-        for p in patterns[:2]:
-            pattern_text += f"  🕯️ {p[2]}\n"
 
         setup_type = signal.get("setup_type")
         active_ref = signal.get("active_ref", {})
 
         if setup_type == "ADDITIONAL":
-            header = "🔥 <b>XAUUSD (গোল্ড) নতুন সেটাপ সতর্কতা</b> 🔥\n━━━━━━━━━━━━━━━━━━━━━━━━━\n⚡ <b>চলমান সিগনাল থাকা সত্ত্বেও নতুন সুযোগ!</b>\n"
-            if active_ref:
-                act_id = active_ref.get("id", "")
-                act_dir = active_ref.get("direction", "")
-                act_entry = active_ref.get("entry", "")
-                act_note = active_ref.get("setup_note", "")
-                header += f"📌 <b>চলমান ট্রেড:</b> #{act_id} {act_dir} @ <code>${act_entry}</code>\n"
-                if act_note:
-                    header += f"💡 <b>সেটআপ ধরণ:</b> <b>{act_note}</b>\n"
-            header += "━━━━━━━━━━━━━━━━━━━━━━━━━"
+            header = f"🔥 <b>আজকের ট্রেড #{trade_num} — নতুন সেটাপ (XAUUSD)</b>"
+            ref_num = active_ref.get("daily_trade_num") or active_ref.get("id", "")
+            ref_dir = active_ref.get("direction", "")
+            extra_line = f"📌 <i>পূর্ববর্তী ট্রেড #{ref_num} {ref_dir} চলমান রেখেই নতুন সুযোগ</i>\n"
         elif setup_type == "REVERSAL":
-            header = "🔄 <b>মার্কেট রিভার্সাল — বিপরীত সেটাপ সতর্কতা!</b> 🔄\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            if active_ref:
-                act_id = active_ref.get("id", "")
-                act_dir = active_ref.get("direction", "")
-                act_entry = active_ref.get("entry", "")
-                header += f"⚠️ <b>পূর্ববর্তী #{act_id} {act_dir} (@ ${act_entry}) ক্লোজ করে নতুন ট্রেন্ডে প্রবেশের সুযোগ!</b>\n"
-            header += "━━━━━━━━━━━━━━━━━━━━━━━━━"
+            header = f"🔄 <b>আজকের ট্রেড #{trade_num} — মার্কেট রিভার্সাল (XAUUSD)</b>"
+            ref_num = active_ref.get("daily_trade_num") or active_ref.get("id", "")
+            ref_dir = active_ref.get("direction", "")
+            extra_line = f"⚠️ <i>পূর্ববর্তী ট্রেড #{ref_num} {ref_dir} ক্লোজ করে নতুন ট্রেন্ড এন্ট্রি</i>\n"
         else:
-            header = "🏆 <b>XAUUSD (গোল্ড) এআই সিগনাল</b> 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━"
+            header = f"🎯 <b>আজকের ট্রেড #{trade_num} (XAUUSD)</b>"
+            extra_line = ""
 
         msg = f"""{header}
-
-{arrow} <b>অ্যাকশন: {action_text}</b>
-💰 <b>Entry:</b> <code>{entry}</code>
-🎯 <b>TP1 (প্রথম টার্গেট):</b> <code>{tp1}</code> (+{abs(round(tp1-entry,1))} ডলার)
-🎯 <b>TP2 (দ্বিতীয় টার্গেট):</b> <code>{tp2}</code> (+{abs(round(tp2-entry,1))} ডলার)
-🎯 <b>TP3 (সর্বোচ্চ টার্গেট):</b> <code>{tp3}</code> (+{abs(round(tp3-entry,1))} ডলার)
-🛑 <b>SL (স্টপ লস):</b> <code>{sl}</code> (-{abs(round(sl-entry,1))} ডলার)
-📊 <b>রিস্ক:রিওয়ার্ড অনুপাত (R:R):</b> {rr}
-⏱️ <b>টাইমফ্রেম:</b> {tf}
-⚡ <b>সিগনালের মেয়াদ:</b> {valid}
-
-📈 <b>এআই কনফিডেন্স: {confidence}%</b>
-[{conf_bar}]
-
-🔍 <b>বিশ্লেষণ স্কোর:</b>
-  📊 টেকনিক্যাল স্কোর: {signal.get('tech_score', 0)}/100
-  📰 নিউজ সেন্টিমেন্ট: {signal.get('news_score', 0)}/100
-  🤖 এআই কনফার্মেশন: {signal.get('ai_score', 0):.0f}/100
-
-⚠️ <b>ঝুঁকির মাত্রা:</b> {risk}
-💼 <b>প্রতি ট্রেডে অনুমোদিত ঝুঁকি:</b> {signal.get('risk_per_trade', 2)}%
-
-📝 <b>সিগনালের কারণ ও যুক্তি:</b>
-{reason_text if reason_text else "  • টেকনিক্যাল ইন্ডিকেটর এবং ফান্ডামেন্টাল নিউজ উভয়ের শক্তিশালী সাপোর্ট রয়েছে।"}
-"""
-
-        if pattern_text:
-            msg += f"\n🕯️ <b>ক্যান্ডেলস্টিক প্যাটার্ন:</b>\n{pattern_text}"
-
-        if warn_text:
-            msg += f"\n⚠️ <b>বিশেষ সতর্কতা:</b>\n{warn_text}"
-
-        if setup_type == "ADDITIONAL":
-            msg += "\n💡 <b>পরামর্শ:</b> আপনার পূর্ববর্তী ট্রেডটি এখনও চালু রয়েছে। এই নতুন সেটআপে অতিরিক্ত এন্ট্রি (স্কেলিং-ইন) নেওয়ার ক্ষেত্রে উভয় ট্রেডের মোট ঝুঁকি অ্যাকাউন্টের ২-৩% এর মধ্যে সীমাবদ্ধ রাখুন।\n"
-        elif setup_type == "REVERSAL":
-            msg += "\n💡 <b>পরামর্শ:</b> মার্কেট ট্রেন্ড বিপরীতমুখী হয়েছে। ঝুঁকি এড়াতে পূর্ববর্তী পজিশন থেকে বের হয়ে নতুন সেটআপ বিবেচনা করুন।\n"
-
-        msg += f"""
-━━━━━━━━━━━━━━━━━━━━━━━━━
-🤖 <i>এআই গোল্ড সিগনাল সিস্টেম | {signal.get('timestamp', '')[:16]}</i>
-📌 <i>সর্বদা সঠিক মানি ম্যানেজমেন্ট ও স্টপ লস ব্যবহার করুন!</i>"""
+━━━━━━━━━━━━━━━━━
+⚡ <b>অ্যাকশন:</b> <b>{dir_text}</b>
+💰 <b>এন্ট্রি (Entry):</b> <code>${entry}</code>
+🎯 <b>TP1 (টার্গেট ১):</b> <code>${tp1}</code>
+🔥 <b>TP2 (টার্গেট ২):</b> <code>${tp2}</code>
+🚀 <b>TP3 (টার্গেট ৩):</b> <code>${tp3}</code>
+🛑 <b>স্টপ লস (SL):</b> <code>${sl}</code>
+⏱️ <b>টাইমফ্রেম:</b> {tf} | 🤖 <b>কনফিডেন্স:</b> {confidence}%
+{extra_line}━━━━━━━━━━━━━━━━━
+📌 <i>সঠিক মানি ম্যানেজমেন্ট ও স্টপ লস ব্যবহার করুন</i>"""
 
         return msg
 
@@ -220,53 +155,62 @@ class TelegramBot:
     # TP/SL Hit Alert (বাংলায়)
     # ─────────────────────────────────────────────────────────
     def format_tp_sl_alert(self, alert_type: str, signal: dict, current_price: float) -> str:
-        """TP বা SL হিট হলে বাংলায় নোটিফিকেশন পাঠায়"""
+        """TP বা SL হিট হলে সংক্ষেপে পরিষ্কার বাংলায় নোটিফিকেশন পাঠায় (আজকের ট্রেড নম্বর উল্লেখ সহ)"""
+        trade_num = signal.get("daily_trade_num") or signal.get("id", 1)
         direction = signal.get("direction", "")
-        entry = signal.get("entry_price", signal.get("entry", 0))
+        dir_text  = "🟢 BUY" if direction == "BUY" else "🔴 SELL"
+        entry     = signal.get("entry_price", signal.get("entry", 0))
+        diff      = abs(round(current_price - entry, 2))
+        pips      = round(diff * 10, 1)
 
         if alert_type == "TP1":
-            emoji  = "✅🎯"
-            title  = "টার্গেট ১ সফলভাবে অর্জিত! (TP1 HIT)"
-            profit = abs(round(current_price - entry, 2))
-            advice = "💡 <b>পরামর্শ:</b> আপনার স্টপ লস (SL) এন্ট্রি প্রাইসে নিয়ে আসুন (Breakeven), যাতে এই ট্রেডে আর কোনো লসের ঝুঁকি না থাকে!"
+            title = f"✅ <b>আজকের ট্রেড #{trade_num}-এর TP1 হিট করেছে!</b> 🎯"
+            body = (
+                f"⚡ <b>ট্রেড:</b> {dir_text} @ <code>${entry}</code>\n"
+                f"📍 <b>বর্তমান প্রাইস:</b> <code>${current_price}</code>\n"
+                f"💵 <b>অর্জিত মুনাফা:</b> <code>+${diff} USD (+{pips} pips)</code>\n"
+                f"💡 <b>পরামর্শ:</b> SL এন্ট্রি প্রাইসে (Breakeven) আনুন"
+            )
         elif alert_type == "TP2":
-            emoji  = "🎉🔥"
-            title  = "টার্গেট ২ সফলভাবে অর্জিত! (TP2 HIT)"
-            profit = abs(round(current_price - entry, 2))
-            advice = "💡 <b>পরামর্শ:</b> চমৎকার মুনাফা হয়েছে! কিছু প্রফিট বুক করুন এবং বাকি ট্রেড ট্রেইলিং স্টপ লস দিয়ে ধরে রাখতে পারেন।"
+            title = f"🎉 <b>আজকের ট্রেড #{trade_num}-এর TP2 হিট করেছে!</b> 🔥"
+            body = (
+                f"⚡ <b>ট্রেড:</b> {dir_text} @ <code>${entry}</code>\n"
+                f"📍 <b>বর্তমান প্রাইস:</b> <code>${current_price}</code>\n"
+                f"💵 <b>অর্জিত মুনাফা:</b> <code>+${diff} USD (+{pips} pips)</code>\n"
+                f"💡 <b>পরামর্শ:</b> কিছু প্রফিট বুক করুন বা ট্রেইলিং SL ব্যবহার করুন"
+            )
         elif alert_type == "TP3":
-            emoji  = "🚀💎"
-            title  = "সর্বোচ্চ টার্গেট ৩ সফলভাবে অর্জিত! (TP3 HIT - JACKPOT)"
-            profit = abs(round(current_price - entry, 2))
-            advice = "💡 <b>পরামর্শ:</b> সর্বোচ্চ টার্গেট স্পর্শ করেছে এবং বিপুল মুনাফা অর্জিত হয়েছে! ট্রেড ক্লোজ করে সম্পূর্ণ প্রফিট সংরক্ষণ করুন।"
+            title = f"🚀 <b>আজকের ট্রেড #{trade_num}-এর TP3 হিট করেছে! (JACKPOT)</b> 💎"
+            body = (
+                f"⚡ <b>ট্রেড:</b> {dir_text} @ <code>${entry}</code>\n"
+                f"📍 <b>বর্তমান প্রাইস:</b> <code>${current_price}</code>\n"
+                f"💵 <b>মোট মুনাফা:</b> <code>+${diff} USD (+{pips} pips)</code>\n"
+                f"💡 <b>পরামর্শ:</b> সর্বোচ্চ টার্গেট অর্জিত, ট্রেড ক্লোজ করে সম্পূর্ণ প্রফিট নিন"
+            )
         elif alert_type == "SL":
-            emoji  = "🛑❌"
-            title  = "স্টপ লস স্পর্শ করেছে (SL HIT)"
-            profit = -abs(round(current_price - entry, 2))
-            advice = "💡 <b>পরামর্শ:</b> নিয়ম মেনে স্টপ লস মেনে চলুন। রিভেঞ্জ ট্রেডিং করবেন না। পরবর্তী পারফেক্ট সিগনালের জন্য অপেক্ষা করুন।"
+            title = f"🛑 <b>আজকের ট্রেড #{trade_num}-এর স্টপ লস (SL) হিট করেছে!</b> ❌"
+            body = (
+                f"⚡ <b>ট্রেড:</b> {dir_text} @ <code>${entry}</code>\n"
+                f"📍 <b>বর্তমান প্রাইস:</b> <code>${current_price}</code>\n"
+                f"📉 <b>লসের পরিমাণ:</b> <code>-${diff} USD (-{pips} pips)</code>\n"
+                f"💡 <b>পরামর্শ:</b> স্টপ লস মেনে চলুন, রিভেঞ্জ ট্রেডিং পরিহার করুন"
+            )
         elif alert_type == "BREAKEVEN":
-            emoji  = "🛡️⚖️"
-            title  = "ট্রেড ব্রেকইভেনে ক্লোজ হয়েছে (Breakeven Exit)"
-            profit = 0.0
-            advice = "💡 <b>তথ্য:</b> টার্গেট ১ সফলভাবে অর্জনের পর স্টপ লস এন্ট্রি প্রাইসে ছিল, তাই এই ট্রেডে কোনো ক্ষতি বা লস হয়নি। সম্পূর্ণ ক্যাপিটাল ১০০% সুরক্ষিত!"
+            title = f"🛡️ <b>আজকের ট্রেড #{trade_num} ব্রেকইভেনে ক্লোজ হয়েছে!</b> ⚖️"
+            body = (
+                f"⚡ <b>ট্রেড:</b> {dir_text} @ <code>${entry}</code>\n"
+                f"📍 <b>এক্সিট প্রাইস:</b> <code>${current_price}</code>\n"
+                f"⚖️ <b>ফলাফল:</b> <code>$0.00 USD (ক্যাপিটাল ১০০% সুরক্ষিত)</code>\n"
+                f"💡 <b>তথ্য:</b> TP1 অর্জনের পর SL এন্ট্রিতে থাকায় কোনো লস হয়নি"
+            )
         else:
-            emoji  = "ℹ️"
-            title  = "মার্কেট আপডেট"
-            profit = 0
-            advice = ""
+            title = f"ℹ️ <b>আজকের ট্রেড #{trade_num} আপডেট</b>"
+            body = f"📍 <b>বর্তমান মার্কেট প্রাইস:</b> <code>${current_price}</code>"
 
-        direction_icon = "🟢 BUY" if direction == "BUY" else "🔴 SELL"
-        sig_id_str = f" (#{signal.get('id')})" if signal.get("id") else ""
-
-        return f"""{emoji} <b>{title}</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━
-⚡ সিগনাল ছিল: <b>{direction_icon}</b>{sig_id_str}
-💰 এন্ট্রি ছিল: <code>{entry}</code>
-📍 বর্তমান মার্কেট প্রাইস: <code>{current_price}</code>
-{'💵 অর্জিত মুনাফা' if profit > 0 else ('⚖️ মোট ফলাফল' if profit == 0 else '📉 লসের পরিমাণ')}: <code>{abs(profit)} USD</code>
-
-{advice}
-━━━━━━━━━━━━━━━━━━━━━━━━━
+        return f"""{title}
+━━━━━━━━━━━━━━━━━
+{body}
+━━━━━━━━━━━━━━━━━
 🤖 <i>এআই গোল্ড সিগনাল সিস্টেম</i>"""
 
     # ─────────────────────────────────────────────────────────
@@ -371,14 +315,15 @@ class TelegramBot:
 মূল্যায়ন: <b>{performance_emoji}</b>
 
 """
-        signals = stats.get("signals", [])[:6]
+        signals = stats.get("signals", [])[:10]
         if signals:
             msg += "📋 <b>আজকের ট্রেডগুলোর তালিকা:</b>\n"
             for s in signals:
+                trade_num = s.get("daily_trade_num") or s.get("id", 1)
                 result_icon = "✅" if s.get("tp_hit", 0) > 0 else ("❌" if s.get("sl_hit", 0) > 0 else "⏳")
                 dir_icon    = "🟢 BUY" if s.get("direction") == "BUY" else "🔴 SELL"
                 res_text    = "মুনাফা অর্জিত" if s.get("tp_hit", 0) > 0 else ("স্টপ লস" if s.get("sl_hit", 0) > 0 else "চলমান")
-                msg += f"  {result_icon} {dir_icon} @ <code>{s.get('entry_price')}</code> — <i>{res_text}</i>\n"
+                msg += f"  {result_icon} <b>ট্রেড #{trade_num}:</b> {dir_icon} @ <code>${s.get('entry_price')}</code> — <i>{res_text}</i>\n"
 
         msg += f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━
