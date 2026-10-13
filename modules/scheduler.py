@@ -120,11 +120,13 @@ class TaskScheduler:
                 opp_dir = "SELL" if signal["direction"] == "BUY" else "BUY"
                 opp_active = [s for s in active_signals if s["direction"] == opp_dir]
 
-                # ── CASE 1: Reversal setup (opposite active trade running) ──
+                # ── CASE 1: Reversal setup (বিপরীত দিকে মার্কেট পরিবর্তন হলে) ──
+                # ব্যবহারকারীর নির্দেশ: রানিং ট্রেডের বিপরীতে মার্কেট হঠাৎ ঘুরে গেলে (যেমন বাই চলাকালীন ডাউনট্রেন্ড/সেল তৈরি হলে)
+                # তখন শুধু নতুন বিপরীত সিগনাল আসবে এবং আগের পজিশন ক্লোজ হবে।
                 if opp_active:
                     opp_trade = opp_active[0]
                     for opp in opp_active:
-                        logger.info(f"Closing opposite signal #{opp['id']} due to reverse signal")
+                        logger.info(f"Closing opposite signal #{opp['id']} due to market reversal ({opp['direction']} -> {signal['direction']})")
                         self.se.close_signal(opp["id"], result="REVERSED", close_price=price)
 
                     signal["setup_type"] = "REVERSAL"
@@ -133,7 +135,7 @@ class TaskScheduler:
                         "daily_trade_num": opp_trade.get("daily_trade_num") or opp_trade.get("id", 1),
                         "direction": opp_trade["direction"],
                         "entry": opp_trade.get("entry_price", price),
-                        "setup_note": "মার্কেট রিভার্সাল — বিপরীত ট্রেড ক্লোজ করে নতুন ট্রেন্ড এন্ট্রি",
+                        "setup_note": "মার্কেট রিভার্সাল — পূর্ববর্তী বিপরীত ট্রেড ক্লোজ করে নতুন ট্রেন্ড এন্ট্রি",
                     }
 
                     sig_id = self.se.save_signal(signal)
@@ -143,75 +145,19 @@ class TaskScheduler:
                     self._last_signal_dir = signal["direction"]
                     self._last_signal_time = now_tz
                     self._last_signal_price = price
-                    logger.info(f"Reversal Signal #{sig_id} sent to Telegram: {signal['direction']}")
+                    logger.info(f"Reversal Signal #{sig_id} sent to Telegram: {signal['direction']} (closed #{opp_trade['id']})")
                     return signal
 
-                # ── CASE 2: Active trade in SAME direction exists ────────────
-                # (ব্যবহারকারীর রিকোয়ারমেন্ট: ট্রেডিং সিগনাল চলমান থাকলেও ভালো সেটাপ পেলে যেন জানায়)
+                # ── CASE 2: Active trade in SAME direction already running ────
+                # ব্যবহারকারীর নির্দেশ: একবার বাই/সেল সিগনাল দেওয়ার পর SL হিট না হওয়া পর্যন্ত একই দিকের নতুন সিগনাল আসবে না বার বার
                 elif same_dir_active:
                     cur_active = same_dir_active[0]
-                    entry_active = cur_active.get("entry_price", price) or price
-                    is_tp1_hit = cur_active.get("tp_hit", 0) >= 1
-                    price_diff = abs(price - entry_active)
-
-                    try:
-                        sig_time = datetime.fromisoformat(cur_active["timestamp"])
-                        elapsed_active_mins = (now_tz - sig_time).total_seconds() / 60
-                    except Exception:
-                        elapsed_active_mins = 999
-
-                    if self._last_additional_alert_time:
-                        elapsed_last_alert_mins = (now_tz - self._last_additional_alert_time).total_seconds() / 60
-                    else:
-                        elapsed_last_alert_mins = 999
-
-                    if send_regardless:
-                        is_valid_additional = True
-                    else:
-                        cooldown_ok = (elapsed_last_alert_mins >= 25) or (price_diff >= 4.0) or (signal["confidence"] >= 80)
-                        reason_tp1 = is_tp1_hit
-                        reason_price = price_diff >= 2.50
-                        reason_time = elapsed_active_mins >= 40
-                        is_valid_additional = cooldown_ok and (reason_tp1 or reason_price or reason_time)
-
-                    if is_valid_additional:
-                        if signal["direction"] == "BUY":
-                            if price < entry_active:
-                                note = f"পুলব্যাক ডিসকাউন্ট এন্ট্রি (${price_diff:.1f} নিচে চমৎকার রি-এন্ট্রি জোন)"
-                            else:
-                                note = f"ব্রেকআউট / ট্রেন্ড কন্টিনিউয়েশন (${price_diff:.1f} উপরে শক্তিশালী বুলিশ চাপ)"
-                        else:
-                            if price > entry_active:
-                                note = f"পুলব্যাক প্রিমিয়াম এন্ট্রি (${price_diff:.1f} উপরে চমৎকার রি-এন্ট্রি জোন)"
-                            else:
-                                note = f"ডাউনট্রেন্ড কন্টিনিউয়েশন ও ব্রেকডাউন (${price_diff:.1f} নিচে শক্তিশালী বিয়ারিশ চাপ)"
-
-                        if is_tp1_hit:
-                            note += " | পূর্বের ট্রেডের TP1 অর্জিত (ঝুঁকিহীন)"
-
-                        signal["setup_type"] = "ADDITIONAL"
-                        signal["active_ref"] = {
-                            "id": cur_active["id"],
-                            "daily_trade_num": cur_active.get("daily_trade_num") or cur_active.get("id", 1),
-                            "direction": cur_active["direction"],
-                            "entry": entry_active,
-                            "tp_hit": cur_active.get("tp_hit", 0),
-                            "setup_note": note,
-                        }
-
-                        sig_id = self.se.save_signal(signal)
-                        signal["id"] = sig_id
-
-                        self.bot.send_signal(signal, price)
-                        self._last_signal_dir = signal["direction"]
-                        self._last_signal_time = now_tz
-                        self._last_signal_price = price
-                        self._last_additional_alert_time = now_tz
-                        logger.info(f"Additional Setup Signal #{sig_id} sent to Telegram (Active #{cur_active['id']} running)")
-                        return signal
-                    else:
-                        logger.info(f"Active #{cur_active['id']} running — setup noted but within debounce (${price} vs ${entry_active}, diff=${price_diff:.1f})")
-                        return signal
+                    act_num = cur_active.get("daily_trade_num") or cur_active.get("id", 1)
+                    logger.info(
+                        f"Active {signal['direction']} trade #{cur_active['id']} (আজকের ট্রেড #{act_num}) "
+                        f"is already running. Skipping duplicate {signal['direction']} signal until SL/TP hit."
+                    )
+                    return signal
 
                 # ── CASE 3: No active signals running (Fresh Setup) ──────────
                 else:
@@ -294,7 +240,11 @@ class TaskScheduler:
                 base_price = old_prices[0]
                 diff = price - base_price
 
-                # Threshold: $7.50 movement in 5 minutes
+                # Threshold: $5.00 movement in 5 minutes
+                if abs(diff) >= 5.00:
+                    # যদি মার্কেটে তীব্র ওঠানামা হয়, তবে তাৎক্ষণিক এনালাইসিস চালিয়ে ট্রেন্ড রিভার্সাল পরীক্ষা করবে
+                    threading.Thread(target=self.run_analysis, daemon=True).start()
+
                 if abs(diff) >= 7.50:
                     # Check cool-off: don't spam if alerted in last 12 minutes
                     if (not self._last_spike_alert_time or

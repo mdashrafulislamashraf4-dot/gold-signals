@@ -180,20 +180,8 @@ class CommandHandler:
 🛑 <b>স্টপ লস (SL):</b> <code>${sl}</code>
 📊 <b>অবস্থা:</b> <b>{status_text}</b>
 ━━━━━━━━━━━━━━━━━
-🔍 <i>নতুন কোনো অতিরিক্ত সেটাপ আছে কি না মার্কেট স্ক্যান করা হচ্ছে...</i>"""
+💡 <i>স্টপ লস (SL) বা টার্গেট অর্জিত না হওয়া পর্যন্ত নতুন কোনো {direction} সিগনাল আসবে না। মার্কেট হঠাৎ ঘুরে গেলে স্বয়ংক্রিয় রিভার্সাল সিগনাল আসবে।</i>"""
                 self.bot.send_message(msg, chat_id=chat_id)
-
-                # চলমান সিগনাল থাকলেও বর্তমান মার্কেট স্ক্যান করে নতুন সেটাপ আছে কি না পরীক্ষা করবে
-                signal = self.sch.run_analysis(send_regardless=True)
-                if not signal or signal.get("direction") == "NEUTRAL" or signal.get("confidence", 0) < 65:
-                    self.bot.send_message(
-                        f"⚪ <b>বর্তমান নতুন সেটআপ স্ট্যাটাস</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"💰 বর্তমান প্রাইস: <code>${price}</code>\n"
-                        f"⚖️ এই মুহূর্তে অতিরিক্ত কোনো নতুন এন্ট্রি সেটাপ তৈরি হয়নি (মার্কেট রেন্জ/নিরপেক্ষ)।\n"
-                        f"💡 <i>আপনার চলমান ট্রেডটি নিরাপদে চালু রয়েছে। নতুন সুযোগ তৈরি হলেই সাথে সাথে স্বয়ংক্রিয় অ্যালার্ট পাঠানো হবে!</i>",
-                        chat_id=chat_id,
-                    )
                 return
 
             self.bot.send_message("⏳ <b>মার্কেট এনালাইসিস চলছে...</b>\nTradingView ডেটা, ১২+ ইন্ডিকেটর এবং বিশ্ব সংবাদের সেন্টিমেন্ট যাচাই করা হচ্ছে। অনুগ্রহ করে একটু অপেক্ষা করুন।", chat_id=chat_id)
@@ -301,18 +289,25 @@ class CommandHandler:
         self.bot.send_message("⚡ <b>তাৎক্ষণিক এআই মার্কেট স্ক্যানিং চলছে...</b>\nলাইভ প্রাইস, চার্ট ভলাটিলিটি ও সেন্টিমেন্ট স্ক্যান করা হচ্ছে।", chat_id=chat_id)
         try:
             price  = self.md.get_current_price() or 0
-            signal = self.sch.run_analysis(send_regardless=True)
-            if not signal or signal.get("direction") == "NEUTRAL" or signal.get("confidence", 0) < 65:
-                msg = (
-                    f"⚡ <b>তাৎক্ষণিক মার্কেট স্ক্যান সম্পন্ন</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🥇 বর্তমান গোল্ড প্রাইস: <code>${price}</code>\n"
-                    f"⚖️ অবস্থা: <b>নিরপেক্ষ (সাইডওয়েজ রেন্জ)</b>\n"
-                    f"📊 টেকনিক্যাল স্কোর: <code>{signal.get('tech_score', 50) if signal else 50}/100</code>\n"
-                    f"📰 নিউজ সেন্টিমেন্ট স্কোর: <code>{signal.get('news_score', 50) if signal else 50}/100</code>\n\n"
-                    f"💡 <i>মার্কেটে সুযোগ আসলেই সাথে সাথে এআই অটোমেটিক নোটিফিকেশন পাঠিয়ে দেবে।</i>"
-                )
-                self.bot.send_message(msg, chat_id=chat_id)
+            active_signals = self.se.get_active_signals()
+            active_note = ""
+            if active_signals:
+                cur = active_signals[0]
+                t_num = cur.get("daily_trade_num") or cur.get("id", 1)
+                active_note = f"\n📌 <b>চলমান ট্রেড:</b> #{t_num} {cur.get('direction')} @ <code>${cur.get('entry_price')}</code> (SL না হওয়া পর্যন্ত নতুন {cur.get('direction')} সিগনাল আসবে না)\n"
+
+            signal = self.sch.run_analysis(send_regardless=False)
+            msg = (
+                f"⚡ <b>তাৎক্ষণিক মার্কেট স্ক্যান সম্পন্ন</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🥇 বর্তমান গোল্ড প্রাইস: <code>${price}</code>\n"
+                f"📊 টেকনিক্যাল স্কোর: <code>{signal.get('tech_score', 50) if signal else 50}/100</code>\n"
+                f"📰 নিউজ সেন্টিমেন্ট: <code>{signal.get('news_score', 50) if signal else 50}/100</code>\n"
+                f"🤖 এআই দিকনির্দেশনা: <b>{signal.get('direction', 'NEUTRAL') if signal else 'NEUTRAL'}</b> ({signal.get('confidence', 0) if signal else 0}%)\n"
+                f"{active_note}━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💡 <i>মার্কেট রিভার্সাল বা নতুন সুযোগ পেলেই স্বয়ংক্রিয় নোটিফিকেশন আসবে।</i>"
+            )
+            self.bot.send_message(msg, chat_id=chat_id)
         except Exception as e:
             self.bot.send_message(f"❌ স্ক্যান এরর: {e}", chat_id=chat_id)
 
