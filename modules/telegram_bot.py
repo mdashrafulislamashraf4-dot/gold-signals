@@ -479,33 +479,70 @@ class TelegramBot:
 
         dir_bn = "বুলিশ (উর্ধ্বমুখী 🟢)" if tech.get('direction') == 'BUY' else ("বেয়ারিশ (নিম্নমুখী 🔴)" if tech.get('direction') == 'SELL' else "নিরপেক্ষ (সাইডওয়েজ ⚪)")
 
-        msg = f"""🔍 <b>সম্পূর্ণ টেকনিক্যাল এনালাইসিস রিপোর্ট</b>
+        # Divergence text
+        divs = tech.get("divergences", [])
+        div_text = ""
+        for d in divs[:2]:
+            div_text += f"  ⚡ {d[2]}\n"
+
+        # Squeeze status
+        sq_status = str(details.get("Squeeze", "RELEASED"))
+        sq_icon = "🔴 কম্প্রেশন (ব্রেকআউট লোডিং)" if "ACTIVE" in sq_status else "🟢 সাধারণ ভোলাটিলিটি"
+
+        # SuperTrend icon
+        st_dir = details.get("SuperTrend", "N/A")
+        st_icon = "🟢 BULLISH" if st_dir == "BULLISH" else ("🔴 BEARISH" if st_dir == "BEARISH" else "N/A")
+
+        msg = f"""🔍 <b>৩০+ ইন্ডিকেটর পূর্ণাঙ্গ টেকনিক্যাল এনালাইসিস</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 💰 <b>XAUUSD প্রাইস:</b> <code>${price}</code>
 📈 <b>সামগ্রিক ট্রেন্ড:</b> <b>{dir_bn}</b>
 🎯 <b>টেকনিক্যাল স্কোর:</b> <b>{tech.get('score', 50)}/100</b>
 
-📊 <b>প্রধান ইন্ডিকেটরসমূহ:</b>
-  • RSI (14): <code>{details.get('RSI', 'N/A')}</code>
-  • MACD: <code>{details.get('MACD', 'N/A')}</code>
-  • EMA 20: <code>{details.get('EMA_20', 'N/A')}</code>
-  • EMA 50: <code>{details.get('EMA_50', 'N/A')}</code>
-  • EMA 200 (দীর্ঘমেয়াদী): <code>{details.get('EMA_200', 'N/A')}</code>
-  • ATR (দৈনিক অস্থিরতা): <code>{details.get('ATR', 'N/A')}</code>
-  • স্টোকাস্টিক K: <code>{details.get('Stochastic_K', 'N/A')}</code>
+📈 <b>ট্রেন্ড ইন্ডিকেটরসমূহ (Trend):</b>
+  • SuperTrend (10,3): <b>{st_icon}</b> (<code>${details.get('SuperTrend_Val', 'N/A')}</code>)
+  • Parabolic SAR: <code>${details.get('PSAR', 'N/A')}</code>
+  • Hull Moving Avg (HMA 16): <code>${details.get('HMA_16', 'N/A')}</code>
+  • EMA 20: <code>${details.get('EMA_20', 'N/A')}</code> | EMA 50: <code>${details.get('EMA_50', 'N/A')}</code>
+  • EMA 200 (ম্যাক্রো ট্রেন্ড): <code>${details.get('EMA_200', 'N/A')}</code>
+  • ইচিমোকু Tenkan: <code>${details.get('Ichimoku_Tenkan', 'N/A')}</code> | Kijun: <code>${details.get('Ichimoku_Kijun', 'N/A')}</code>
 
-🏗️ <b>গুরুত্বপূর্ণ সাপোর্ট ও রেজিস্ট্যান্স লেভেল:</b>
+⚡ <b>মোমেন্টাম ও অসিলেটরসমূহ (Oscillators):</b>
+  • RSI (14): <code>{details.get('RSI', 'N/A')}</code>
+  • MACD: <code>{details.get('MACD', 'N/A')}</code> (সিগনাল: <code>{details.get('MACD_Signal', 'N/A')}</code>)
+  • স্টোকাস্টিক (K / D): <code>{details.get('Stochastic_K', 'N/A')} / {details.get('Stochastic_D', 'N/A')}</code>
+  • স্টোকাস্টিক RSI (Fast): <code>{details.get('StochRSI_K', 'N/A')}</code>
+  • CCI (কমোডিটি ইনডেক্স): <code>{details.get('CCI', 'N/A')}</code>
+  • Awesome Oscillator (AO): <code>{details.get('Awesome_Osc', 'N/A')}</code>
+  • Williams %R: <code>{details.get('Williams_R', 'N/A')}</code>
+  • ADX (ট্রেন্ড শক্তি): <code>{details.get('ADX', 'N/A')}</code>
+
+🌊 <b>ভোলাটিলিটি ও ব্যান্ডস (Volatility & Squeeze):</b>
+  • বলিঙ্গার ব্যান্ডস: আপার <code>${details.get('BB_Upper', 'N/A')}</code> | লোয়ার <code>${details.get('BB_Lower', 'N/A')}</code>
+  • TTM Bollinger Squeeze: <b>{sq_icon}</b>
+  • ATR (গড় অস্থিরতা): <code>${details.get('ATR', 'N/A')}</code>
+
+💼 <b>স্মার্ট মানি ও ভলিউম প্রবাহ (Smart Money Flow):</b>
+  • প্রাতিষ্ঠানিক VWAP: <code>${details.get('VWAP', 'N/A')}</code>
+  • Money Flow Index (MFI): <code>{details.get('MFI', 'N/A')}</code>
+  • Chaikin Money Flow (CMF): <code>{details.get('CMF', 'N/A')}</code>
+
+🏗️ <b>সাপোর্ট, রেজিস্ট্যান্স ও পিভট লেভেল:</b>
   🔻 সাপোর্ট জোন: <code>{sup if sup else 'N/A'}</code>
   🔺 রেজিস্ট্যান্স জোন: <code>{res if res else 'N/A'}</code>
-  ⚖️ পিভট পয়েন্ট (Pivot): <code>{key_levels.get('pivot', 'N/A')}</code>
+  ⚖️ ডেইলি পিভট (Classic): <code>${details.get('Pivot_Point', key_levels.get('pivot', 'N/A'))}</code>
+  ⚡ Camarilla ব্রেকআউট: H4 <code>${details.get('Cam_H4', 'N/A')}</code> | L4 <code>${details.get('Cam_L4', 'N/A')}</code>
 
-📐 <b>ফিবোনাচ্চি রিট্রেসমেন্ট লেভেল:</b>
+📐 <b>ফিবোনাচ্চি গোল্ডেন রেশিও:</b>
 {fib_text if fib_text else "  হিসাব করা হচ্ছে..."}
 """
+        if div_text:
+            msg += f"\n⚡ <b>লুকায়িত ডাইভারজেন্স (Divergence):</b>\n{div_text}"
+
         if pat_text:
             msg += f"\n🕯️ <b>ডিটেক্ট হওয়া ক্যান্ডেলস্টিক প্যাটার্ন:</b>\n{pat_text}"
 
-        msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n🤖 <i>এআই গোল্ড সিগনাল সিস্টেম</i>"
+        msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━━\n🤖 <i>এআই গোল্ড সিগনাল সিস্টেম | ৩০+ ইন্ডিকেটর কনফার্মেশন ইঞ্জিন</i>"
         return msg
 
     # ─────────────────────────────────────────────────────────

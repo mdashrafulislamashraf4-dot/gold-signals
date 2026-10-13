@@ -113,26 +113,40 @@ Analyze XAUUSD (Gold) market and provide a trading signal.
 - Timeframe: {tf}
 - Market Status: Active
 
-## Technical Indicators
-- RSI(14): {details.get('RSI', 'N/A')}
-- MACD: {details.get('MACD', 'N/A')}
-- EMA20: {details.get('EMA_20', 'N/A')}
-- EMA50: {details.get('EMA_50', 'N/A')}
-- EMA200: {details.get('EMA_200', 'N/A')}
-- ATR(14): {details.get('ATR', 'N/A')}
-- ADX: {details.get('ADX', 'N/A')}
-- Stochastic K: {details.get('Stochastic_K', 'N/A')}
-- Williams %R: {details.get('Williams_R', 'N/A')}
-- BB Upper: {details.get('BB_Upper', 'N/A')}
-- BB Lower: {details.get('BB_Lower', 'N/A')}
+## Technical Indicators & Multi-Oscillator Metrics
+- Trend:
+  - SuperTrend (10,3): {details.get('SuperTrend', 'N/A')} (${details.get('SuperTrend_Val', 'N/A')})
+  - Parabolic SAR: ${details.get('PSAR', 'N/A')}
+  - Hull MA (HMA 16): ${details.get('HMA_16', 'N/A')}
+  - EMA 20: ${details.get('EMA_20', 'N/A')} | EMA 50: ${details.get('EMA_50', 'N/A')} | EMA 200: ${details.get('EMA_200', 'N/A')}
+  - Ichimoku: Tenkan=${details.get('Ichimoku_Tenkan', 'N/A')}, Kijun=${details.get('Ichimoku_Kijun', 'N/A')}
+- Momentum & Oscillators:
+  - RSI(14): {details.get('RSI', 'N/A')}
+  - MACD: {details.get('MACD', 'N/A')} (Signal: {details.get('MACD_Signal', 'N/A')})
+  - Stochastic K: {details.get('Stochastic_K', 'N/A')} | D: {details.get('Stochastic_D', 'N/A')}
+  - Stochastic RSI (Fast): {details.get('StochRSI_K', 'N/A')}
+  - CCI (Commodity Channel Index 20): {details.get('CCI', 'N/A')}
+  - Williams %R: {details.get('Williams_R', 'N/A')}
+  - Awesome Oscillator (AO): {details.get('Awesome_Osc', 'N/A')}
+  - ADX (Trend Strength): {details.get('ADX', 'N/A')}
+- Volatility & Squeeze:
+  - ATR (14): ${details.get('ATR', 'N/A')}
+  - Bollinger Bands: Upper=${details.get('BB_Upper', 'N/A')}, Lower=${details.get('BB_Lower', 'N/A')}
+  - TTM Bollinger/Keltner Squeeze: {details.get('Squeeze', 'RELEASED')}
+- Smart Money & Volume:
+  - Institutional VWAP: ${details.get('VWAP', 'N/A')}
+  - Money Flow Index (MFI 14): {details.get('MFI', 'N/A')}
+  - Chaikin Money Flow (CMF 20): {details.get('CMF', 'N/A')}
 
-## Technical Score
-- Bullish Signals: {len(tech.get('buy_signals', []))}
+## Technical Confluence Summary
+- Bullish Indicator Signals ({len(tech.get('buy_signals', []))} count):
   - {buy_sigs}
-- Bearish Signals: {len(tech.get('sell_signals', []))}
+- Bearish Indicator Signals ({len(tech.get('sell_signals', []))} count):
   - {sell_sigs}
 - Overall Technical Score: {tech.get('score', 50)}/100
 - Candlestick Patterns: {patterns}
+- Divergences: {", ".join([d[0] for d in tech.get('divergences', [])]) or "None"}
+- Daily Pivot: ${details.get('Pivot_Point', 'N/A')} (Camarilla Breakout H4: ${details.get('Cam_H4', 'N/A')}, L4: ${details.get('Cam_L4', 'N/A')})
 
 ## Fibonacci Levels
 {fib_str}
