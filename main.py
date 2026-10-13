@@ -121,9 +121,10 @@ def main():
     news_analyzer = NewsAnalyzer()
     ai_analyzer   = AIAnalyzer(api_key=GEMINI_API_KEY)
     signal_engine = SignalEngine()
+    signal_engine.cleanup_ghost_signals()
     telegram_bot  = TelegramBot(token=TELEGRAM_BOT_TOKEN, chat_ids=TELEGRAM_CHAT_IDS)
 
-    logger.info("✅ All modules initialized")
+    logger.info("✅ All modules initialized (Ghost signals cleaned up)")
 
     # ── Test Telegram Connection ───────────────────────────
     logger.info("📱 Testing Telegram connection...")
@@ -170,8 +171,8 @@ def main():
     logger.info("🔍 Running initial analysis...")
     time.sleep(3)
     try:
-        init_sig = scheduler.run_analysis(send_regardless=True)
-        if init_sig and init_sig.get("direction") == "NEUTRAL":
+        init_sig = scheduler.run_analysis(send_regardless=False)
+        if init_sig and (init_sig.get("direction") == "NEUTRAL" or init_sig.get("confidence", 0) < 65):
             telegram_bot.send_message(
                 f"📊 <b>প্রাথমিক গোল্ড মার্কেট স্ক্যান সম্পন্ন</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"

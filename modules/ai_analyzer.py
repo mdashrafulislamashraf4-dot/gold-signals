@@ -338,6 +338,63 @@ WARNINGS:
     # ─────────────────────────────────────────────────────────
     # News Impact Analysis (AI-powered)
     # ─────────────────────────────────────────────────────────
+    # Evaluate & Filter Major Breaking News (বড় খবর যাচাই)
+    # ─────────────────────────────────────────────────────────
+    def evaluate_breaking_news(self, news_title: str, news_summary: str, current_price: float) -> Optional[str]:
+        """
+        যাচাই করে এটি কি আসলেই গোল্ড মার্কেটে বড় প্রভাব ফেলার মতো ব্রেকিং নিউজ কি না।
+        ছোটখাটো খবর, সাধারণ কমেন্ট্রি, বা দৈনিক পূর্বাভাস হলে None রিটার্ন করে এলার্ট বাতিল করবে।
+        """
+        if not self.available:
+            return None
+
+        prompt = f"""
+You are a senior Gold (XAUUSD) market analyst and macroeconomic risk specialist.
+Critically evaluate the following news item:
+Title: "{news_title}"
+Summary: "{news_summary}"
+Current Gold Price: ${current_price}
+
+Your task: Determine if this is a GENUINE MAJOR BREAKING EVENT that will cause SUBSTANTIAL market volatility (at least $15 - $30+ sudden move in Gold price), such as:
+1. Significant geopolitical escalation (direct war strikes, missile attacks, major conflict escalation involving major powers like Middle East, Russia/Ukraine, US/China, nuclear tensions).
+2. Major central bank policy surprises or emergency statements (Fed rate decision, emergency rate cut/hike, surprise Powell announcement).
+3. Major economic shocks (surprise CPI/NFP release deviating heavily from estimates, sovereign debt crisis, banking collapse).
+
+STRICT EXCLUSIONS - MUST BE REJECTED:
+- Routine daily market commentary or price recaps ("Gold rises as dollar softens", "Gold holds steady")
+- Analyst forecasts, technical analysis, price targets ("Gold Price Forecast: XAUUSD looks to plunge...", "Gold price targets $4200")
+- Routine opinions, newsletters, opinion pieces, or daily summaries
+- Local city gold rates or jewelry store prices
+- Routine geopolitical commentary without new breaking attacks/events
+
+INSTRUCTIONS:
+If this news is ROUTINE, MINOR, AN OPINION, OR A FORECAST:
+Respond strictly with single word:
+SKIP
+
+If this news is truly a MAJOR BREAKING MARKET-MOVING EVENT:
+Start with "APPROVED:" and provide a professional, concise impact assessment strictly in natural BENGALI (বাংলা ভাষায়):
+• <b>সংক্ষিপ্ত খবর:</b> [বাংলায় ১ লাইনে কি ঘটেছে]
+• <b>মার্কেট অভিমুখ:</b> [বুলিশ (দাম বাড়ার তীব্র সম্ভাবনা 🟢) / বেয়ারিশ (দাম কমার তীব্র সম্ভাবনা 🔴) / চরম অস্থিরতা ⚠️]
+• <b>প্রত্যাশিত মুভমেন্ট:</b> [আনুমানিক কত ডলার ওঠানামা হতে পারে, যেমন $১৫-$৩০]
+• <b>কেন বড় প্রভাব পড়বে:</b> [১-২ লাইনে মূল অর্থনৈতিক/ভূরাজনৈতিক কারণ]
+• <b>ট্রেডারদের করণীয়:</b> [১ লাইনে তাৎক্ষণিক পরামর্শ]
+"""
+        try:
+            ai_text = self._generate(prompt)
+            if not ai_text:
+                return None
+            ai_text = ai_text.strip()
+            if "SKIP" in ai_text.upper() and "APPROVED:" not in ai_text:
+                return None
+            if "APPROVED:" in ai_text:
+                clean_text = ai_text.split("APPROVED:", 1)[1].strip()
+                return clean_text
+            return None
+        except Exception as e:
+            logger.error(f"Breaking news evaluation error: {e}")
+            return None
+
     def analyze_news_impact(self, news_title: str, current_price: float) -> str:
         """একটি নির্দিষ্ট নিউজের গোল্ড মার্কেটে প্রভাব বাংলায় বিশ্লেষণ করে"""
         if not self.available:

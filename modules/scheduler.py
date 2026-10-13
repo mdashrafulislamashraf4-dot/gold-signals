@@ -18,7 +18,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from config import (
-    TIMEZONE, SIGNAL_CHECK_INTERVAL, DAILY_REPORT_TIME,
+    TIMEZONE, SIGNAL_CHECK_INTERVAL, NEWS_CHECK_INTERVAL, DAILY_REPORT_TIME,
     MIN_CONFIDENCE, NEWS_API_KEY, TIMEFRAMES,
 )
 
@@ -45,6 +45,7 @@ class TaskScheduler:
         # Price history buffer for detecting sudden spikes: (datetime, price)
         self._price_history   = deque(maxlen=60)
         self._last_spike_alert_time = None
+        self._last_news_alert_time  = None
 
     # ─────────────────────────────────────────────────────────
     # Core Analysis Task
@@ -113,9 +114,25 @@ class TaskScheduler:
                 signal["confidence"] >= MIN_CONFIDENCE and
                 (signal["direction"] != self._last_signal_dir or send_regardless)):
 
+                active_signals = self.se.get_active_signals()
+                same_dir_active = [s for s in active_signals if s["direction"] == signal["direction"]]
+                if same_dir_active and not send_regardless:
+                    logger.info(f"Active {signal['direction']} trade already open (#{same_dir_active[0]['id']}) — skipping duplicate signal")
+                    return signal
+
+                # Close any opposite trade if market trend reversed
+                opp_dir = "SELL" if signal["direction"] == "BUY" else "BUY"
+                for opp in [s for s in active_signals if s["direction"] == opp_dir]:
+                    logger.info(f"Closing opposite signal #{opp['id']} due to reverse signal")
+                    self.se.close_signal(opp["id"], result="REVERSED", close_price=price)
+
+                # SAVE TO DB ONLY WHEN ACTUALLY SENT TO TELEGRAM!
+                sig_id = self.se.save_signal(signal)
+                signal["id"] = sig_id
+
                 self.bot.send_signal(signal, price)
                 self._last_signal_dir = signal["direction"]
-                logger.info(f"Signal sent: {signal['direction']}")
+                logger.info(f"Signal #{sig_id} sent to Telegram: {signal['direction']}")
             else:
                 logger.info(f"Signal not sent (confidence: {signal['confidence']}%, direction: {signal['direction']})")
 
@@ -182,37 +199,57 @@ class TaskScheduler:
             logger.error(f"Volatility monitor error: {e}")
 
     # ─────────────────────────────────────────────────────────
-    # News Monitor (প্রতি ৩ মিনিটে)
+    # News Monitor (শুধুমাত্র বড় মার্কেট মুভার ব্রেকিং নিউজ)
     # ─────────────────────────────────────────────────────────
     def monitor_news(self):
-        """গুরুত্বপূর্ণ আন্তর্জাতিক সংবাদ ও যুদ্ধাবস্থা মনিটর করে এবং অ্যালার্ট পাঠায়"""
+        """বড় আন্তর্জাতিক যুদ্ধ বা উচ্চ মাত্রার ব্রেকিং নিউজ যাচাই করে এলার্ট পাঠায়"""
         try:
-            articles    = self.na.fetch_all_news(api_key=NEWS_API_KEY)
-            news_result = self.na.analyze_sentiment(articles)
+            now = datetime.now()
+            # Cooldown: Minimum 45 minutes between automatic news alerts to prevent spam
+            if self._last_news_alert_time:
+                elapsed_mins = (now - self._last_news_alert_time).total_seconds() / 60
+                if elapsed_mins < 45:
+                    logger.debug(f"News alert cooldown active ({elapsed_mins:.1f}m < 45m)")
+                    return
 
-            high_impact = news_result.get("high_impact_news", [])
-            price       = self.md.get_current_price() or 0
+            articles = self.na.fetch_all_news(api_key=NEWS_API_KEY)
+            price    = self.md.get_current_price() or 0
 
-            for news in high_impact[:2]:
-                news_id = news.get("title", "")[:50]
-                if news_id in self._last_news_sent:
+            for article in articles:
+                title   = article.get("title", "")
+                summary = article.get("summary", "")
+                source  = article.get("source", "")
+
+                if not title:
                     continue
 
-                # AI impact analysis in Bengali
-                ai_analysis = ""
-                if self.ai.available and news.get("title"):
-                    ai_analysis = self.ai.analyze_news_impact(news["title"], price)
+                # 1. Filter out routine forecasts, commentary, and minor news
+                if not self.na.is_candidate_breaking_news(article):
+                    continue
 
-                news["impact"] = "HIGH"
-                self.bot.send_news_alert(news, ai_analysis)
-                self._last_news_sent.add(news_id)
+                # 2. Check if already sent in DB
+                if self.na.is_news_already_sent(title):
+                    continue
 
-                # Keep memory manageable
-                if len(self._last_news_sent) > 100:
-                    self._last_news_sent = set(list(self._last_news_sent)[-50:])
+                # 3. AI Verification: Ask Gemini if this is a genuine high-impact market shock
+                ai_analysis = self.ai.evaluate_breaking_news(title, summary, price)
+                if not ai_analysis:
+                    logger.info(f"News skipped by AI filter (minor/routine/forecast): {title[:60]}")
+                    continue
 
-                logger.info(f"News alert sent: {news.get('title', '')[:60]}")
-                time.sleep(2)
+                # 4. Genuine major breaking news confirmed!
+                news_item = {
+                    "title":  title,
+                    "source": source,
+                    "link":   article.get("link", ""),
+                    "impact": "HIGH",
+                }
+
+                self.bot.send_news_alert(news_item, ai_analysis)
+                self.na.record_sent_news(title, source, impact="HIGH")
+                self._last_news_alert_time = now
+                logger.warning(f"🚨 Major breaking news alert sent: {title[:65]}")
+                break  # Send max 1 alert per check cycle
 
         except Exception as e:
             logger.error(f"News monitor error: {e}")
@@ -284,12 +321,12 @@ class TaskScheduler:
             replace_existing=True,
         )
 
-        # 4) News monitoring — every 3 minutes
+        # 4) News monitoring — every NEWS_CHECK_INTERVAL minutes (default 20m)
         self.scheduler.add_job(
             self.monitor_news,
-            IntervalTrigger(minutes=3),
+            IntervalTrigger(minutes=NEWS_CHECK_INTERVAL),
             id="news_monitor",
-            name="আন্তর্জাতিক নিউজ ওয়াচডগ (প্রতি ৩ মিনিট)",
+            name=f"আন্তর্জাতিক ব্রেকিং নিউজ ওয়াচডগ (প্রতি {NEWS_CHECK_INTERVAL} মিনিট)",
             replace_existing=True,
         )
 
@@ -318,7 +355,7 @@ class TaskScheduler:
         logger.info(f"  📊 Signal check: every {SIGNAL_CHECK_INTERVAL} min")
         logger.info(f"  🔍 TP/SL monitor: every 1 min")
         logger.info(f"  ⚡ Volatility spike watchdog: every 45 sec")
-        logger.info(f"  📰 News watchdog: every 3 min")
+        logger.info(f"  📰 News watchdog: every {NEWS_CHECK_INTERVAL} min (বড় খবর যাচাই)")
         logger.info(f"  📋 Daily report: {DAILY_REPORT_TIME} ({TIMEZONE})")
         logger.info(f"  📅 Weekly report: Friday 17:30 ({TIMEZONE})")
 

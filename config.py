@@ -28,6 +28,7 @@ TIMEZONE                = os.getenv("TIMEZONE", "Asia/Dhaka")
 SIGNAL_CHECK_INTERVAL   = int(os.getenv("SIGNAL_CHECK_INTERVAL", "15"))
 RISK_PER_TRADE          = float(os.getenv("RISK_PER_TRADE", "2"))
 MIN_CONFIDENCE          = int(os.getenv("MIN_CONFIDENCE", "65"))
+NEWS_CHECK_INTERVAL     = int(os.getenv("NEWS_CHECK_INTERVAL", "20"))
 DAILY_REPORT_TIME       = os.getenv("DAILY_REPORT_TIME", "23:59")
 
 # ── Trading ───────────────────────────────────────────────

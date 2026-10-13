@@ -145,14 +145,45 @@ class CommandHandler:
     # ─────────────────────────────────────────────────────────
     def _cmd_signal(self, chat_id: str):
         """🎯 লাইভ সিগনাল"""
-        self.bot.send_message("⏳ <b>মার্কেট এনালাইসিস চলছে...</b>\nTradingView ডেটা, ১২+ ইন্ডিকেটর এবং বিশ্ব সংবাদের সেন্টিমেন্ট যাচাই করা হচ্ছে। অনুগ্রহ করে একটু অপেক্ষা করুন।", chat_id=chat_id)
         try:
-            signal = self.sch.run_analysis(send_regardless=True)
-            if signal and signal.get("direction") != "NEUTRAL":
-                msg = self.bot.format_signal_message(signal)
+            active_signals = self.se.get_active_signals()
+            price = self.md.get_current_price() or 0
+
+            # যদি ইতিমধ্যে কোনো সিগনাল চালু থাকে, তবে তার লাইভ অগ্রগতি দেখাবে
+            if active_signals:
+                cur_sig = active_signals[0]
+                direction = cur_sig.get("direction", "")
+                dir_icon = "🟢 BUY" if direction == "BUY" else "🔴 SELL"
+                tp1 = cur_sig.get("tp1")
+                tp2 = cur_sig.get("tp2")
+                sl = cur_sig.get("sl")
+                entry = cur_sig.get("entry_price", cur_sig.get("entry", 0))
+                tp_hit = cur_sig.get("tp_hit", 0)
+
+                status_text = "🎯 টার্গেট ১ সফলভাবে অর্জিত, টার্গেট ২-এর অপেক্ষায়" if tp_hit == 1 else "চলমান ট্রেড (Active)"
+
+                pnl = round(price - entry, 2) if direction == "BUY" else round(entry - price, 2)
+                pnl_icon = "💵 রানিং প্রফিট" if pnl >= 0 else "📉 রানিং ফ্লোটিং লস"
+
+                msg = f"""🎯 <b>এই মুহূর্তে চলমান ট্রেডিং সিগনাল</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ সিগনাল: <b>{dir_icon}</b>
+💰 এন্ট্রি প্রাইস: <code>${entry}</code>
+📍 বর্তমান মার্কেট প্রাইস: <code>${price}</code>
+{pnl_icon}: <code>{abs(pnl)} USD</code>
+
+🎯 TP1 (টার্গেট ১): <code>${tp1}</code>
+🔥 TP2 (টার্গেট ২): <code>${tp2}</code>
+🛑 স্টপ লস (SL): <code>${sl}</code>
+📊 স্ট্যাটাস: <b>{status_text}</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💡 <i>পূর্ববর্তী সিগনালটি এখনও মার্কেটে সক্রিয় রয়েছে। এটি সম্পন্ন হলে স্বয়ংক্রিয় অ্যালার্ট দেওয়া হবে!</i>"""
                 self.bot.send_message(msg, chat_id=chat_id)
-            else:
-                price = self.md.get_current_price() or 0
+                return
+
+            self.bot.send_message("⏳ <b>মার্কেট এনালাইসিস চলছে...</b>\nTradingView ডেটা, ১২+ ইন্ডিকেটর এবং বিশ্ব সংবাদের সেন্টিমেন্ট যাচাই করা হচ্ছে। অনুগ্রহ করে একটু অপেক্ষা করুন।", chat_id=chat_id)
+            signal = self.sch.run_analysis(send_regardless=True)
+            if not signal or signal.get("direction") == "NEUTRAL":
                 self.bot.send_message(
                     f"⚪ <b>বর্তমানে কোনো সুস্পষ্ট সিগনাল নেই</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -162,6 +193,7 @@ class CommandHandler:
                     chat_id=chat_id,
                 )
         except Exception as e:
+            logger.error(f"Cmd signal error: {e}")
             self.bot.send_message(f"❌ সিগনাল তৈরিতে সমস্যা হয়েছে: {e}", chat_id=chat_id)
 
     def _cmd_price(self, chat_id: str):

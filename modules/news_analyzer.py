@@ -7,19 +7,42 @@
 """
 
 import logging
+import sqlite3
 import time
 from datetime import datetime, timedelta
 from typing import Optional
 import re
 
 import feedparser
+import pytz
 import requests
+
+from config import DB_PATH, TIMEZONE
 
 logger = logging.getLogger(__name__)
 
 
 class NewsAnalyzer:
     """গোল্ড মার্কেট-সংক্রান্ত নিউজ এনালাইসিস করে"""
+
+    EXCLUDE_KEYWORDS = [
+        "forecast", "prediction", "technical analysis", "outlook", "weekly forecast",
+        "price analysis", "price target", "chart analysis", "live blog", "today's price",
+        "gold rate today", "opinion", "commentary", "daily chart", "price steady",
+        "edges higher", "edges lower", "slips", "inches up", "holds firm", "trades flat",
+        "market wrap", "morning brief", "where is gold heading", "recommendation",
+        "bullion rate", "jewelry", "jewellery", "gold rate in", "why gold",
+        "what's next for gold", "chart setup", "setups",
+    ]
+
+    BREAKING_SHOCK_KEYWORDS = [
+        "breaking", "declares war", "air strike", "airstrike", "missile attack", "missile strike",
+        "ballistic missile", "drone attack", "nuclear threat", "emergency meeting",
+        "invasion begins", "state of emergency", "military retaliation", "assassination",
+        "fed cuts rate", "fed raises rate", "interest rate decision", "fomc decision",
+        "emergency rate", "powell speech", "bank failure", "bank collapse",
+        "debt default", "emergency sanctions", "ceasefire broken", "escalation",
+    ]
 
     HIGH_IMPACT_KEYWORDS = [
         "war", "attack", "military", "nuclear", "missile", "bomb", "strike",
@@ -31,6 +54,71 @@ class NewsAnalyzer:
         "dollar collapse", "debt ceiling", "default", "Treasury yield",
         "China gold", "central bank gold", "gold reserves", "safe haven",
     ]
+
+    def is_candidate_breaking_news(self, article: dict) -> bool:
+        """
+        যাচাই করে কোনো নিউজ কি বড় মার্কেট মুভার হওয়ার মতো সম্ভাব্য ব্রেকিং নিউজ কি না।
+        রুটিন পূর্বাভাস, মতামত, চার্ট এনালাইসিস সরাসরি বাদ দেয়।
+        """
+        title = article.get("title", "").lower()
+        summary = article.get("summary", "").lower()
+        full_text = f"{title} {summary}"
+
+        # 1. Blacklist check - Exclude routine commentary, forecast, opinion
+        for kw in self.EXCLUDE_KEYWORDS:
+            if kw.lower() in title:
+                return False
+
+        # 2. Whitelist check - Must match a major shock keyword
+        for kw in self.BREAKING_SHOCK_KEYWORDS:
+            if kw.lower() in full_text:
+                return True
+
+        # 3. Check combinations of high-impact geopolitics + attack/strike/war
+        geo_keywords = ["middle east", "iran", "israel", "gaza", "lebanon", "russia", "ukraine", "taiwan", "china"]
+        action_keywords = ["strike", "attack", "bomb", "missile", "war", "invade", "military", "nuclear", "retaliation"]
+        has_geo = any(g in full_text for g in geo_keywords)
+        has_action = any(a in full_text for a in action_keywords)
+        if has_geo and has_action:
+            return True
+
+        # 4. Check combinations of central bank + emergency / surprise
+        fed_keywords = ["federal reserve", "fed", "fomc", "powell"]
+        fed_action = ["surprise", "shock", "emergency", "cuts rate", "hikes rate", "urgent decision"]
+        has_fed = any(f in full_text for f in fed_keywords)
+        has_fed_action = any(fa in full_text for fa in fed_action)
+        if has_fed and has_fed_action:
+            return True
+
+        return False
+
+    def is_news_already_sent(self, title: str) -> bool:
+        """যাচাই করে এই নিউজটি ইতিমধ্যে টেলিগ্রামে পাঠানো হয়েছে কি না"""
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                short_title = title[:45].strip()
+                row = conn.execute(
+                    "SELECT id FROM news_alerts WHERE title LIKE ? LIMIT 1",
+                    (f"%{short_title}%",)
+                ).fetchone()
+                return row is not None
+        except Exception as e:
+            logger.error(f"DB check news sent error: {e}")
+            return False
+
+    def record_sent_news(self, title: str, source: str = "", impact: str = "HIGH"):
+        """পাঠানো নিউজটি ডেটাবেসে রেকর্ড করে যাতে পুনরাবৃত্তি না হয়"""
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                tz = pytz.timezone(TIMEZONE)
+                now = datetime.now(tz).isoformat()
+                conn.execute(
+                    "INSERT INTO news_alerts (timestamp, title, source, impact, sent) VALUES (?, ?, ?, ?, 1)",
+                    (now, title, source, impact)
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"DB record sent news error: {e}")
 
     BULLISH_KEYWORDS = [
         "gold rises", "gold surges", "gold rally", "gold up",

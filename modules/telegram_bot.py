@@ -210,6 +210,11 @@ class TelegramBot:
             title  = "স্টপ লস স্পর্শ করেছে (SL HIT)"
             profit = -abs(round(current_price - entry, 2))
             advice = "💡 <b>পরামর্শ:</b> নিয়ম মেনে স্টপ লস মেনে চলুন। রিভেঞ্জ ট্রেডিং করবেন না। পরবর্তী পারফেক্ট সিগনালের জন্য অপেক্ষা করুন।"
+        elif alert_type == "BREAKEVEN":
+            emoji  = "🛡️⚖️"
+            title  = "ট্রেড ব্রেকইভেনে ক্লোজ হয়েছে (Breakeven Exit)"
+            profit = 0.0
+            advice = "💡 <b>তথ্য:</b> টার্গেট ১ সফলভাবে অর্জনের পর স্টপ লস এন্ট্রি প্রাইসে ছিল, তাই এই ট্রেডে কোনো ক্ষতি বা লস হয়নি। সম্পূর্ণ ক্যাপিটাল ১০০% সুরক্ষিত!"
         else:
             emoji  = "ℹ️"
             title  = "মার্কেট আপডেট"
@@ -223,7 +228,7 @@ class TelegramBot:
 ⚡ সিগনাল ছিল: <b>{direction_icon}</b>
 💰 এন্ট্রি ছিল: <code>{entry}</code>
 📍 বর্তমান মার্কেট প্রাইস: <code>{current_price}</code>
-{'💵 অর্জিত মুনাফা' if profit >= 0 else '📉 লসের পরিমাণ'}: <code>{abs(profit)} USD</code>
+{'💵 অর্জিত মুনাফা' if profit > 0 else ('⚖️ মোট ফলাফল' if profit == 0 else '📉 লসের পরিমাণ')}: <code>{abs(profit)} USD</code>
 
 {advice}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
