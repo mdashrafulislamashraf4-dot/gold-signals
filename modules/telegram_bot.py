@@ -146,8 +146,32 @@ class TelegramBot:
         for p in patterns[:2]:
             pattern_text += f"  🕯️ {p[2]}\n"
 
-        msg = f"""🏆 <b>XAUUSD (গোল্ড) এআই সিগনাল</b> 🏆
-━━━━━━━━━━━━━━━━━━━━━━━━━
+        setup_type = signal.get("setup_type")
+        active_ref = signal.get("active_ref", {})
+
+        if setup_type == "ADDITIONAL":
+            header = "🔥 <b>XAUUSD (গোল্ড) নতুন সেটাপ সতর্কতা</b> 🔥\n━━━━━━━━━━━━━━━━━━━━━━━━━\n⚡ <b>চলমান সিগনাল থাকা সত্ত্বেও নতুন সুযোগ!</b>\n"
+            if active_ref:
+                act_id = active_ref.get("id", "")
+                act_dir = active_ref.get("direction", "")
+                act_entry = active_ref.get("entry", "")
+                act_note = active_ref.get("setup_note", "")
+                header += f"📌 <b>চলমান ট্রেড:</b> #{act_id} {act_dir} @ <code>${act_entry}</code>\n"
+                if act_note:
+                    header += f"💡 <b>সেটআপ ধরণ:</b> <b>{act_note}</b>\n"
+            header += "━━━━━━━━━━━━━━━━━━━━━━━━━"
+        elif setup_type == "REVERSAL":
+            header = "🔄 <b>মার্কেট রিভার্সাল — বিপরীত সেটাপ সতর্কতা!</b> 🔄\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            if active_ref:
+                act_id = active_ref.get("id", "")
+                act_dir = active_ref.get("direction", "")
+                act_entry = active_ref.get("entry", "")
+                header += f"⚠️ <b>পূর্ববর্তী #{act_id} {act_dir} (@ ${act_entry}) ক্লোজ করে নতুন ট্রেন্ডে প্রবেশের সুযোগ!</b>\n"
+            header += "━━━━━━━━━━━━━━━━━━━━━━━━━"
+        else:
+            header = "🏆 <b>XAUUSD (গোল্ড) এআই সিগনাল</b> 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+        msg = f"""{header}
 
 {arrow} <b>অ্যাকশন: {action_text}</b>
 💰 <b>Entry:</b> <code>{entry}</code>
@@ -179,6 +203,11 @@ class TelegramBot:
 
         if warn_text:
             msg += f"\n⚠️ <b>বিশেষ সতর্কতা:</b>\n{warn_text}"
+
+        if setup_type == "ADDITIONAL":
+            msg += "\n💡 <b>পরামর্শ:</b> আপনার পূর্ববর্তী ট্রেডটি এখনও চালু রয়েছে। এই নতুন সেটআপে অতিরিক্ত এন্ট্রি (স্কেলিং-ইন) নেওয়ার ক্ষেত্রে উভয় ট্রেডের মোট ঝুঁকি অ্যাকাউন্টের ২-৩% এর মধ্যে সীমাবদ্ধ রাখুন।\n"
+        elif setup_type == "REVERSAL":
+            msg += "\n💡 <b>পরামর্শ:</b> মার্কেট ট্রেন্ড বিপরীতমুখী হয়েছে। ঝুঁকি এড়াতে পূর্ববর্তী পজিশন থেকে বের হয়ে নতুন সেটআপ বিবেচনা করুন।\n"
 
         msg += f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -227,10 +256,11 @@ class TelegramBot:
             advice = ""
 
         direction_icon = "🟢 BUY" if direction == "BUY" else "🔴 SELL"
+        sig_id_str = f" (#{signal.get('id')})" if signal.get("id") else ""
 
         return f"""{emoji} <b>{title}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-⚡ সিগনাল ছিল: <b>{direction_icon}</b>
+⚡ সিগনাল ছিল: <b>{direction_icon}</b>{sig_id_str}
 💰 এন্ট্রি ছিল: <code>{entry}</code>
 📍 বর্তমান মার্কেট প্রাইস: <code>{current_price}</code>
 {'💵 অর্জিত মুনাফা' if profit > 0 else ('⚖️ মোট ফলাফল' if profit == 0 else '📉 লসের পরিমাণ')}: <code>{abs(profit)} USD</code>

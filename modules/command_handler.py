@@ -164,14 +164,14 @@ class CommandHandler:
                 entry = cur_sig.get("entry_price", cur_sig.get("entry", 0))
                 tp_hit = cur_sig.get("tp_hit", 0)
 
-                status_text = "🎯 টার্গেট ১ সফলভাবে অর্জিত, টার্গেট ২-এর অপেক্ষায়" if tp_hit == 1 else "চলমান ট্রেড (Active)"
+                status_text = "🎯 টার্গেট ১ সফলভাবে অর্জিত, টার্গেট ২-এর অপেক্ষায় (SL ব্রেকইভেনে)" if tp_hit == 1 else "চলমান ট্রেড (Active)"
 
                 pnl = round(price - entry, 2) if direction == "BUY" else round(entry - price, 2)
                 pnl_icon = "💵 রানিং প্রফিট" if pnl >= 0 else "📉 রানিং ফ্লোটিং লস"
 
                 msg = f"""🎯 <b>এই মুহূর্তে চলমান ট্রেডিং সিগনাল</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-⚡ সিগনাল: <b>{dir_icon}</b>
+⚡ সিগনাল: <b>{dir_icon}</b> (সিগনাল #{cur_sig.get('id', '')})
 💰 এন্ট্রি প্রাইস: <code>${entry}</code>
 📍 বর্তমান মার্কেট প্রাইস: <code>${price}</code>
 {pnl_icon}: <code>{abs(pnl)} USD</code>
@@ -181,13 +181,25 @@ class CommandHandler:
 🛑 স্টপ লস (SL): <code>${sl}</code>
 📊 স্ট্যাটাস: <b>{status_text}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-💡 <i>পূর্ববর্তী সিগনালটি এখনও মার্কেটে সক্রিয় রয়েছে। এটি সম্পন্ন হলে স্বয়ংক্রিয় অ্যালার্ট দেওয়া হবে!</i>"""
+🔍 <i>এখন বর্তমান মার্কেট স্ক্যান করে দেখা হচ্ছে নতুন কোনো ভালো সেটাপ আছে কি না...</i>"""
                 self.bot.send_message(msg, chat_id=chat_id)
+
+                # চলমান সিগনাল থাকলেও বর্তমান মার্কেট স্ক্যান করে নতুন সেটাপ আছে কি না পরীক্ষা করবে
+                signal = self.sch.run_analysis(send_regardless=True)
+                if not signal or signal.get("direction") == "NEUTRAL" or signal.get("confidence", 0) < 65:
+                    self.bot.send_message(
+                        f"⚪ <b>বর্তমান নতুন সেটআপ স্ট্যাটাস</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"💰 বর্তমান প্রাইস: <code>${price}</code>\n"
+                        f"⚖️ এই মুহূর্তে অতিরিক্ত কোনো নতুন এন্ট্রি সেটাপ তৈরি হয়নি (মার্কেট রেন্জ/নিরপেক্ষ)।\n"
+                        f"💡 <i>আপনার চলমান ট্রেডটি নিরাপদে চালু রয়েছে। নতুন সুযোগ তৈরি হলেই সাথে সাথে স্বয়ংক্রিয় অ্যালার্ট পাঠানো হবে!</i>",
+                        chat_id=chat_id,
+                    )
                 return
 
             self.bot.send_message("⏳ <b>মার্কেট এনালাইসিস চলছে...</b>\nTradingView ডেটা, ১২+ ইন্ডিকেটর এবং বিশ্ব সংবাদের সেন্টিমেন্ট যাচাই করা হচ্ছে। অনুগ্রহ করে একটু অপেক্ষা করুন।", chat_id=chat_id)
             signal = self.sch.run_analysis(send_regardless=True)
-            if not signal or signal.get("direction") == "NEUTRAL":
+            if not signal or signal.get("direction") == "NEUTRAL" or signal.get("confidence", 0) < 65:
                 self.bot.send_message(
                     f"⚪ <b>বর্তমানে কোনো সুস্পষ্ট সিগনাল নেই</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -289,11 +301,9 @@ class CommandHandler:
         """⚡ দ্রুত মার্কেট স্ক্যান"""
         self.bot.send_message("⚡ <b>তাৎক্ষণিক এআই মার্কেট স্ক্যানিং চলছে...</b>\nলাইভ প্রাইস, চার্ট ভলাটিলিটি ও সেন্টিমেন্ট স্ক্যান করা হচ্ছে।", chat_id=chat_id)
         try:
-            signal = self.sch.run_analysis(send_regardless=True)
             price  = self.md.get_current_price() or 0
-            if signal and signal.get("direction") != "NEUTRAL":
-                msg = self.bot.format_signal_message(signal)
-            else:
+            signal = self.sch.run_analysis(send_regardless=True)
+            if not signal or signal.get("direction") == "NEUTRAL" or signal.get("confidence", 0) < 65:
                 msg = (
                     f"⚡ <b>তাৎক্ষণিক মার্কেট স্ক্যান সম্পন্ন</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -303,7 +313,7 @@ class CommandHandler:
                     f"📰 নিউজ সেন্টিমেন্ট স্কোর: <code>{signal.get('news_score', 50) if signal else 50}/100</code>\n\n"
                     f"💡 <i>মার্কেটে সুযোগ আসলেই সাথে সাথে এআই অটোমেটিক নোটিফিকেশন পাঠিয়ে দেবে।</i>"
                 )
-            self.bot.send_message(msg, chat_id=chat_id)
+                self.bot.send_message(msg, chat_id=chat_id)
         except Exception as e:
             self.bot.send_message(f"❌ স্ক্যান এরর: {e}", chat_id=chat_id)
 

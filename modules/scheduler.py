@@ -39,6 +39,9 @@ class TaskScheduler:
 
         self.scheduler        = BackgroundScheduler(timezone=TIMEZONE)
         self._last_signal_dir = "NEUTRAL"
+        self._last_signal_time = None
+        self._last_signal_price = None
+        self._last_additional_alert_time = None
         self._last_news_sent  = set()
         self._running         = False
 
@@ -110,31 +113,135 @@ class TaskScheduler:
             logger.info(f"Final signal: {signal['direction']} | Confidence: {signal['confidence']}%")
 
             # 9) Send signal if confidence is sufficient
-            if (signal["direction"] != "NEUTRAL" and
-                signal["confidence"] >= MIN_CONFIDENCE and
-                (signal["direction"] != self._last_signal_dir or send_regardless)):
-
+            if signal["direction"] != "NEUTRAL" and signal["confidence"] >= MIN_CONFIDENCE:
+                now_tz = datetime.now(pytz.timezone(TIMEZONE))
                 active_signals = self.se.get_active_signals()
                 same_dir_active = [s for s in active_signals if s["direction"] == signal["direction"]]
-                if same_dir_active and not send_regardless:
-                    logger.info(f"Active {signal['direction']} trade already open (#{same_dir_active[0]['id']}) — skipping duplicate signal")
+                opp_dir = "SELL" if signal["direction"] == "BUY" else "BUY"
+                opp_active = [s for s in active_signals if s["direction"] == opp_dir]
+
+                # ── CASE 1: Reversal setup (opposite active trade running) ──
+                if opp_active:
+                    opp_trade = opp_active[0]
+                    for opp in opp_active:
+                        logger.info(f"Closing opposite signal #{opp['id']} due to reverse signal")
+                        self.se.close_signal(opp["id"], result="REVERSED", close_price=price)
+
+                    signal["setup_type"] = "REVERSAL"
+                    signal["active_ref"] = {
+                        "id": opp_trade["id"],
+                        "direction": opp_trade["direction"],
+                        "entry": opp_trade.get("entry_price", price),
+                        "setup_note": "মার্কেট রিভার্সাল — বিপরীত ট্রেড ক্লোজ করে নতুন ট্রেন্ড এন্ট্রি",
+                    }
+
+                    sig_id = self.se.save_signal(signal)
+                    signal["id"] = sig_id
+
+                    self.bot.send_signal(signal, price)
+                    self._last_signal_dir = signal["direction"]
+                    self._last_signal_time = now_tz
+                    self._last_signal_price = price
+                    logger.info(f"Reversal Signal #{sig_id} sent to Telegram: {signal['direction']}")
                     return signal
 
-                # Close any opposite trade if market trend reversed
-                opp_dir = "SELL" if signal["direction"] == "BUY" else "BUY"
-                for opp in [s for s in active_signals if s["direction"] == opp_dir]:
-                    logger.info(f"Closing opposite signal #{opp['id']} due to reverse signal")
-                    self.se.close_signal(opp["id"], result="REVERSED", close_price=price)
+                # ── CASE 2: Active trade in SAME direction exists ────────────
+                # (ব্যবহারকারীর রিকোয়ারমেন্ট: ট্রেডিং সিগনাল চলমান থাকলেও ভালো সেটাপ পেলে যেন জানায়)
+                elif same_dir_active:
+                    cur_active = same_dir_active[0]
+                    entry_active = cur_active.get("entry_price", price) or price
+                    is_tp1_hit = cur_active.get("tp_hit", 0) >= 1
+                    price_diff = abs(price - entry_active)
 
-                # SAVE TO DB ONLY WHEN ACTUALLY SENT TO TELEGRAM!
-                sig_id = self.se.save_signal(signal)
-                signal["id"] = sig_id
+                    try:
+                        sig_time = datetime.fromisoformat(cur_active["timestamp"])
+                        elapsed_active_mins = (now_tz - sig_time).total_seconds() / 60
+                    except Exception:
+                        elapsed_active_mins = 999
 
-                self.bot.send_signal(signal, price)
-                self._last_signal_dir = signal["direction"]
-                logger.info(f"Signal #{sig_id} sent to Telegram: {signal['direction']}")
+                    if self._last_additional_alert_time:
+                        elapsed_last_alert_mins = (now_tz - self._last_additional_alert_time).total_seconds() / 60
+                    else:
+                        elapsed_last_alert_mins = 999
+
+                    if send_regardless:
+                        is_valid_additional = True
+                    else:
+                        cooldown_ok = (elapsed_last_alert_mins >= 25) or (price_diff >= 4.0) or (signal["confidence"] >= 80)
+                        reason_tp1 = is_tp1_hit
+                        reason_price = price_diff >= 2.50
+                        reason_time = elapsed_active_mins >= 40
+                        is_valid_additional = cooldown_ok and (reason_tp1 or reason_price or reason_time)
+
+                    if is_valid_additional:
+                        if signal["direction"] == "BUY":
+                            if price < entry_active:
+                                note = f"পুলব্যাক ডিসকাউন্ট এন্ট্রি (${price_diff:.1f} নিচে চমৎকার রি-এন্ট্রি জোন)"
+                            else:
+                                note = f"ব্রেকআউট / ট্রেন্ড কন্টিনিউয়েশন (${price_diff:.1f} উপরে শক্তিশালী বুলিশ চাপ)"
+                        else:
+                            if price > entry_active:
+                                note = f"পুলব্যাক প্রিমিয়াম এন্ট্রি (${price_diff:.1f} উপরে চমৎকার রি-এন্ট্রি জোন)"
+                            else:
+                                note = f"ডাউনট্রেন্ড কন্টিনিউয়েশন ও ব্রেকডাউন (${price_diff:.1f} নিচে শক্তিশালী বিয়ারিশ চাপ)"
+
+                        if is_tp1_hit:
+                            note += " | পূর্বের ট্রেডের TP1 অর্জিত (ঝুঁকিহীন)"
+
+                        signal["setup_type"] = "ADDITIONAL"
+                        signal["active_ref"] = {
+                            "id": cur_active["id"],
+                            "direction": cur_active["direction"],
+                            "entry": entry_active,
+                            "tp_hit": cur_active.get("tp_hit", 0),
+                            "setup_note": note,
+                        }
+
+                        sig_id = self.se.save_signal(signal)
+                        signal["id"] = sig_id
+
+                        self.bot.send_signal(signal, price)
+                        self._last_signal_dir = signal["direction"]
+                        self._last_signal_time = now_tz
+                        self._last_signal_price = price
+                        self._last_additional_alert_time = now_tz
+                        logger.info(f"Additional Setup Signal #{sig_id} sent to Telegram (Active #{cur_active['id']} running)")
+                        return signal
+                    else:
+                        logger.info(f"Active #{cur_active['id']} running — setup noted but within debounce (${price} vs ${entry_active}, diff=${price_diff:.1f})")
+                        return signal
+
+                # ── CASE 3: No active signals running (Fresh Setup) ──────────
+                else:
+                    if self._last_signal_time:
+                        elapsed_since_signal = (now_tz - self._last_signal_time).total_seconds() / 60
+                    else:
+                        elapsed_since_signal = 999
+
+                    price_diff_last = abs(price - self._last_signal_price) if self._last_signal_price else 999
+
+                    if send_regardless:
+                        should_send = True
+                    elif signal["direction"] != self._last_signal_dir:
+                        should_send = True
+                    else:
+                        should_send = (elapsed_since_signal >= 25) or (price_diff_last >= 3.0)
+
+                    if should_send:
+                        sig_id = self.se.save_signal(signal)
+                        signal["id"] = sig_id
+
+                        self.bot.send_signal(signal, price)
+                        self._last_signal_dir = signal["direction"]
+                        self._last_signal_time = now_tz
+                        self._last_signal_price = price
+                        logger.info(f"Fresh Signal #{sig_id} sent to Telegram: {signal['direction']}")
+                        return signal
+                    else:
+                        logger.info(f"Signal skipped (cooldown active: {elapsed_since_signal:.1f}m < 25m, price diff: {price_diff_last:.1f})")
+                        return signal
             else:
-                logger.info(f"Signal not sent (confidence: {signal['confidence']}%, direction: {signal['direction']})")
+                logger.info(f"Signal not sent (confidence: {signal.get('confidence')}%, direction: {signal.get('direction')})")
 
             return signal
 
