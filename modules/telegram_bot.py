@@ -12,6 +12,8 @@ from typing import Optional, Union
 
 import requests
 
+from config import SIGNAL_CHECK_INTERVAL
+
 logger = logging.getLogger(__name__)
 
 
@@ -606,7 +608,7 @@ class TelegramBot:
 🤖 <b>এআই ইঞ্জিন:</b> Google Gemini AI
 📰 <b>নিউজ ওয়াচডগ:</b> ২৪/৭ রিয়েলটাইম স্ক্যানিং সক্রিয়
 ⚡ <b>তীব্র ওঠানামা সেন্সর:</b> সক্রিয় (প্রতি ৪৫ সেকেন্ড পর পর নজরদারি)
-⏰ <b>সিগনাল এনালাইসিস:</b> প্রতি ১৫ মিনিট অন্তর মাল্টি-টাইমফ্রেম
+⏰ <b>সিগনাল এনালাইসিস:</b> প্রতি {SIGNAL_CHECK_INTERVAL} মিনিট অন্তর মাল্টি-টাইমফ্রেম
 
 💡 <b>নিচের ছবিতে দেওয়া বাটনগুলো ব্যবহার করে যেকোনো তথ্য এক ক্লিকে পেয়ে যান!</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━
