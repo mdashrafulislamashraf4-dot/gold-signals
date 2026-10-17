@@ -24,7 +24,8 @@ MAIN_KEYBOARD = {
         [{"text": "🔍 টেকনিক্যাল এনালাইসিস"}, {"text": "📰 ব্রেকিং নিউজ ও প্রভাব"}],
         [{"text": "📅 আজকের ইকোনমিক ইভেন্ট"}, {"text": "📊 আজকের রিপোর্ট"}],
         [{"text": "🗓️ সাপ্তাহিক রিপোর্ট"}, {"text": "⚡ দ্রুত মার্কেট স্ক্যান"}],
-        [{"text": "⚙️ সিস্টেম স্ট্যাটাস"}, {"text": "💡 ট্রেডিং গাইড ও সাহায্য"}],
+        [{"text": "📋 চেকলিস্ট ও নিয়ম"}, {"text": "⚙️ সিস্টেম স্ট্যাটাস"}],
+        [{"text": "💡 ট্রেডিং গাইড ও সাহায্য"}],
     ],
     "resize_keyboard": True,
     "persistent": True,
@@ -101,7 +102,7 @@ class TelegramBot:
     # Signal Alert Format (বাংলায় + ট্রেডিং প্যারামিটার)
     # ─────────────────────────────────────────────────────────
     def format_signal_message(self, signal: dict, current_price: float = None) -> str:
-        """ট্রেডিং সিগনাল সহজ ও পরিষ্কারভাবে বাংলায় ফরম্যাট করে (কাজের তথ্য ও আজকের ট্রেড নম্বর সহ)"""
+        """ট্রেডিং সিগনাল সহজ ও পরিষ্কারভাবে বাংলায় ফরম্যাট করে (মাস্টার স্ট্র্যাটেজি ও SMC প্যারামিটার সহ)"""
         direction = signal.get("direction", "NEUTRAL")
         confidence = signal.get("confidence", 0)
         trade_num = signal.get("daily_trade_num") or signal.get("id", 1)
@@ -118,7 +119,10 @@ class TelegramBot:
         tp2   = signal.get("tp2", 0)
         tp3   = signal.get("tp3", 0)
         sl    = signal.get("sl", 0)
-        tf    = signal.get("timeframe", "H1")
+        tf    = signal.get("timeframe", "4H-1H-15m-5m")
+        rr    = signal.get("rr_ratio", "1:2.0")
+        lot   = signal.get("suggested_lot", 0.01)
+        checklist_score = signal.get("checklist_score", "")
 
         setup_type = signal.get("setup_type")
         active_ref = signal.get("active_ref", {})
@@ -134,8 +138,16 @@ class TelegramBot:
             ref_dir = active_ref.get("direction", "")
             extra_line = f"⚠️ <i>পূর্ববর্তী ট্রেড #{ref_num} {ref_dir} ক্লোজ করে নতুন ট্রেন্ড এন্ট্রি</i>\n"
         else:
-            header = f"🎯 <b>আজকের ট্রেড #{trade_num} (XAUUSD)</b>"
+            header = f"🎯 <b>আজকের ট্রেড #{trade_num} — মাস্টার স্ট্র্যাটেজি (XAUUSD)</b>"
             extra_line = ""
+
+        # Confluence bullet points
+        reasons = signal.get("reasoning", [])
+        reason_text = ""
+        if reasons:
+            reason_text = "\n💡 <b>সেটআপ লজিক:</b>\n" + "\n".join([f"  • {r}" for r in reasons[:3]]) + "\n"
+
+        chk_badge = f" | 📋 চেকলিস্ট: <b>{checklist_score} পাস</b>" if checklist_score else ""
 
         msg = f"""{header}
 ━━━━━━━━━━━━━━━━━
@@ -145,11 +157,45 @@ class TelegramBot:
 🔥 <b>TP2 (টার্গেট ২):</b> <code>${tp2}</code>
 🚀 <b>TP3 (টার্গেট ৩):</b> <code>${tp3}</code>
 🛑 <b>স্টপ লস (SL):</b> <code>${sl}</code>
-⏱️ <b>টাইমফ্রেম:</b> {tf} | 🤖 <b>কনফিডেন্স:</b> {confidence}%
-{extra_line}━━━━━━━━━━━━━━━━━
-📌 <i>সঠিক মানি ম্যানেজমেন্ট ও স্টপ লস ব্যবহার করুন</i>"""
+⚖️ <b>রিস্ক-টু-রিওয়ার্ড (R:R):</b> <code>{rr}</code>
+⏱️ <b>টাইমফ্রেম:</b> {tf} | 🤖 <b>কনফিডেন্স:</b> {confidence}%{chk_badge}
+{extra_line}{reason_text}━━━━━━━━━━━━━━━━━
+🛡️ <b>রিস্ক ম্যানেজমেন্ট:</b>
+  • প্রতি ট্রেডে রিস্ক: <b>০.৫%</b> (প্রস্তাবিত লট: <code>{lot}</code> / $1000)
+📌 <i>স্টপ লস কখনোই সরিয়ে ক্ষতি বাড়াবেন না</i>"""
 
         return msg
+
+    def format_no_trade_message(self, data: dict, current_price: float) -> str:
+        """ভালো সেটআপ না থাকলে নো-ট্রেড স্ট্যাটাস ও লিকুইডিটি ম্যাপ বাংলায় ফরম্যাট করে"""
+        liquidity = data.get("liquidity", {})
+        session = liquidity.get("current_session", "সাধারণ সেশন")
+        score = data.get("checklist_score", "0/9")
+        reasons = data.get("reasoning", ["পারফেক্ট ইনস্টিটিউশনাল কনফার্মেশন অপেক্ষমান"])
+
+        reason_str = "\n".join([f"  • {r}" for r in reasons[:3]])
+
+        pdh = liquidity.get("pdh", "N/A")
+        pdl = liquidity.get("pdl", "N/A")
+        ah = liquidity.get("asian_high", "N/A")
+        al = liquidity.get("asian_low", "N/A")
+
+        return f"""🟡 <b>মার্কেট স্ট্যাটাস: No Trade (অপেক্ষা করুন)</b>
+━━━━━━━━━━━━━━━━━
+💰 <b>বর্তমান XAUUSD প্রাইস:</b> <code>${current_price}</code>
+⏱️ <b>বর্তমান সেশন:</b> {session}
+📈 <b>4H ট্রেন্ড:</b> <b>{data.get('trend_4h', 'N/A')}</b> | 🎯 <b>1H বায়াস:</b> <b>{data.get('bias_1h', 'N/A')}</b>
+
+🗺️ <b>লিকুইডিটি ম্যাপ (SMC):</b>
+  • Asian Session: High <code>${ah}</code> | Low <code>${al}</code>
+  • Previous Day: High <code>${pdh}</code> | Low <code>${pdl}</code>
+
+📋 <b>মাস্টার স্ট্র্যাটেজি চেকলিস্ট:</b> <b>{score} উত্তীর্ণ</b>
+⚡ <b>বর্তমান অবস্থা:</b>
+{reason_str}
+
+━━━━━━━━━━━━━━━━━
+💡 <i>'No Setup = No Trade' — প্রতিদিন ট্রেড নেওয়া লক্ষ্য নয়, ভালো সেটআপ এলে তবেই এন্ট্রি।</i>"""
 
     # ─────────────────────────────────────────────────────────
     # TP/SL Hit Alert (বাংলায়)
@@ -571,10 +617,14 @@ class TelegramBot:
     # Public Send Wrappers
     # ─────────────────────────────────────────────────────────
     def send_signal(self, signal: dict, current_price: float = None) -> bool:
-        if signal.get("direction") == "NEUTRAL":
+        if signal.get("direction") in ("NEUTRAL", "NO_TRADE", "WAIT"):
             return False
         msg = self.format_signal_message(signal, current_price)
         return self.send_message(msg)
+
+    def send_no_trade_status(self, master_data: dict, price: float, chat_id: str = None) -> bool:
+        msg = self.format_no_trade_message(master_data, price)
+        return self.send_message(msg, chat_id=chat_id)
 
     def send_tp_sl_alert(self, alert_type: str, signal: dict, price: float) -> bool:
         msg = self.format_tp_sl_alert(alert_type, signal, price)

@@ -112,19 +112,21 @@ class CommandHandler:
             "⚡ দ্রুত মার্কেট স্ক্যান":       self._cmd_scan,
             "⚙️ সিস্টেম স্ট্যাটাস":       self._cmd_status,
             "💡 ট্রেডিং গাইড ও সাহায্য":     self._cmd_help,
+            "📋 চেকলিস্ট ও নিয়ম":         self._cmd_checklist,
 
             # ── স্ল্যাশ কমান্ড হ্যান্ডলার ──────────────────────
-            "/signal":   self._cmd_signal,
-            "/price":    self._cmd_price,
-            "/news":     self._cmd_news,
-            "/analysis": self._cmd_analysis,
-            "/calendar": self._cmd_calendar,
-            "/report":   self._cmd_report,
-            "/weekly":   self._cmd_weekly,
-            "/scan":     self._cmd_scan,
-            "/status":   self._cmd_status,
-            "/help":     self._cmd_help,
-            "/start":    self._cmd_start,
+            "/signal":    self._cmd_signal,
+            "/price":     self._cmd_price,
+            "/news":      self._cmd_news,
+            "/analysis":  self._cmd_analysis,
+            "/calendar":  self._cmd_calendar,
+            "/report":    self._cmd_report,
+            "/weekly":    self._cmd_weekly,
+            "/scan":      self._cmd_scan,
+            "/status":    self._cmd_status,
+            "/help":      self._cmd_help,
+            "/checklist": self._cmd_checklist,
+            "/start":     self._cmd_start,
         }
 
         # Clean command if starts with /
@@ -237,19 +239,55 @@ class CommandHandler:
             self.bot.send_message(f"❌ সংবাদ সংগ্রহে এরর: {e}", chat_id=chat_id)
 
     def _cmd_analysis(self, chat_id: str):
-        """🔍 টেকনিক্যাল এনালাইসিস"""
-        self.bot.send_message("🔍 <b>১২+ টেকনিক্যাল ইন্ডিকেটর এবং ক্যান্ডেলস্টিক এনালাইসিস চলছে...</b>", chat_id=chat_id)
+        """🔍 টেকনিক্যাল এনালাইসিস — মাল্টি-টাইমফ্রেম ইনস্টিটিউশনাল মাস্টার স্ট্র্যাটেজি"""
+        self.bot.send_message("🔍 <b>4H → 1H → 15m → 5m ইনস্টিটিউশনাল এনালাইসিস চলছে...</b>", chat_id=chat_id)
         try:
-            price      = self.md.get_current_price()
-            df         = self.md.get_ohlcv(timeframe="1h", bars=200)
-            tech       = self.ta.get_technical_score(df)
-            key_levels = self.md.get_key_levels(df)
+            price  = self.md.get_current_price() or 0
+            df_4h  = self.md.get_ohlcv(timeframe="4h", bars=60)
+            df_1h  = self.md.get_ohlcv(timeframe="1h", bars=100)
+            df_15m = self.md.get_ohlcv(timeframe="15m", bars=150)
+            df_5m  = self.md.get_ohlcv(timeframe="5m", bars=60)
 
-            msg = self.bot.format_technical_analysis(price, tech, key_levels)
+            tech = self.ta.analyze_master_strategy(
+                df_4h=df_4h,
+                df_1h=df_1h,
+                df_15m=df_15m,
+                df_5m=df_5m,
+                current_price=price,
+            )
+
+            if tech.get("direction") in ("BUY", "SELL"):
+                msg = self.bot.format_signal_message(tech, price)
+            else:
+                msg = self.bot.format_no_trade_message(tech, price)
+
             self.bot.send_message(msg, chat_id=chat_id)
 
         except Exception as e:
+            logger.error(f"Analysis command error: {e}", exc_info=True)
             self.bot.send_message(f"❌ এনালাইসিস করতে সমস্যা হয়েছে: {e}", chat_id=chat_id)
+
+    def _cmd_checklist(self, chat_id: str):
+        """📋 মাস্টার স্ট্র্যাটেজি চেকলিস্ট"""
+        msg = """📋 <b>XAUUSD Intraday Master Strategy — ৯-দফা চেকলিস্ট</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━
+প্রতিটি ট্রেডের পূর্বে এই ৯টি ধাপ কঠোরভাবে যাচাই করা হয়:
+
+1️⃣ <b>Economic Calendar:</b> আসন্ন High-impact News (CPI, NFP, FOMC) দেখা
+2️⃣ <b>4H Market Trend:</b> বড় ট্রেন্ড ও সুইং হাই/লো (Direction)
+3️⃣ <b>1H Intraday Bias:</b> আজ Buy/Sell নাকি Range (EMA 50/200)
+4️⃣ <b>Liquidity Map:</b> PDH/PDL ও Asian Session High/Low চিহ্নিত করা
+5️⃣ <b>15m SMC Setup:</b> Liquidity Sweep, Displacement ও BOS/CHoCH
+6️⃣ <b>5m Confirmation:</b> রিজেকশন ক্যান্ডেল ও FVG রিটেস্ট অপেক্ষা
+7️⃣ <b>SL, TP & R:R:</b> ইনভ্যালিডেশনের নিচে SL এবং কমপক্ষে 1:2 R:R
+8️⃣ <b>Risk Rules:</b> ০.৫% রিস্ক এবং স্প্রেড সহনশীলতা যাচাই
+9️⃣ <b>Trade Journal:</b> এন্ট্রির কারণ ও ফলাফল রেকর্ড করা
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💡 <b>সোনালী দর্শন:</b>
+<i>Trend ➔ Liquidity ➔ Setup ➔ Confirmation ➔ Risk Check ➔ Entry।
+শর্ত না মিললে <b>NO TRADE</b> থাকাই সেরা ট্রেডারের লক্ষণ।</i>"""
+        self.bot.send_message(msg, chat_id=chat_id)
 
     def _cmd_calendar(self, chat_id: str):
         """📅 আজকের ইকোনমিক ইভেন্ট"""
@@ -285,27 +323,28 @@ class CommandHandler:
             self.bot.send_message(f"❌ সাপ্তাহিক রিপোর্টে এরর: {e}", chat_id=chat_id)
 
     def _cmd_scan(self, chat_id: str):
-        """⚡ দ্রুত মার্কেট স্ক্যান"""
-        self.bot.send_message("⚡ <b>তাৎক্ষণিক এআই মার্কেট স্ক্যানিং চলছে...</b>\nলাইভ প্রাইস, চার্ট ভলাটিলিটি ও সেন্টিমেন্ট স্ক্যান করা হচ্ছে।", chat_id=chat_id)
+        """⚡ দ্রুত মার্কেট স্ক্যান — লিকুইডিটি ও সেশন স্ক্যান"""
+        self.bot.send_message("⚡ <b>তাৎক্ষণিক প্রাতিষ্ঠানিক লিকুইডিটি ও মার্কেট স্ক্যানিং চলছে...</b>", chat_id=chat_id)
         try:
             price  = self.md.get_current_price() or 0
+            df_15m = self.md.get_ohlcv("15m", bars=150)
+            liquidity = self.ta.calculate_session_and_liquidity_levels(df_15m)
             active_signals = self.se.get_active_signals()
             active_note = ""
             if active_signals:
                 cur = active_signals[0]
                 t_num = cur.get("daily_trade_num") or cur.get("id", 1)
-                active_note = f"\n📌 <b>চলমান ট্রেড:</b> #{t_num} {cur.get('direction')} @ <code>${cur.get('entry_price')}</code> (SL না হওয়া পর্যন্ত নতুন {cur.get('direction')} সিগনাল আসবে না)\n"
+                active_note = f"\n📌 <b>চলমান ট্রেড:</b> #{t_num} {cur.get('direction')} @ <code>${cur.get('entry_price')}</code>\n"
 
-            signal = self.sch.run_analysis(send_regardless=False)
             msg = (
                 f"⚡ <b>তাৎক্ষণিক মার্কেট স্ক্যান সম্পন্ন</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🥇 বর্তমান গোল্ড প্রাইস: <code>${price}</code>\n"
-                f"📊 টেকনিক্যাল স্কোর: <code>{signal.get('tech_score', 50) if signal else 50}/100</code>\n"
-                f"📰 নিউজ সেন্টিমেন্ট: <code>{signal.get('news_score', 50) if signal else 50}/100</code>\n"
-                f"🤖 এআই দিকনির্দেশনা: <b>{signal.get('direction', 'NEUTRAL') if signal else 'NEUTRAL'}</b> ({signal.get('confidence', 0) if signal else 0}%)\n"
+                f"🥇 <b>বর্তমান গোল্ড প্রাইস:</b> <code>${price}</code>\n"
+                f"⏱️ <b>বর্তমান সেশন:</b> {liquidity.get('current_session', 'N/A')}\n"
+                f"🗺️ <b>Asian Range:</b> <code>${liquidity.get('asian_low', 'N/A')}</code> – <code>${liquidity.get('asian_high', 'N/A')}</code>\n"
+                f"📍 <b>Previous Day:</b> PDH <code>${liquidity.get('pdh', 'N/A')}</code> | PDL <code>${liquidity.get('pdl', 'N/A')}</code>\n"
                 f"{active_note}━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"💡 <i>মার্কেট রিভার্সাল বা নতুন সুযোগ পেলেই স্বয়ংক্রিয় নোটিফিকেশন আসবে।</i>"
+                f"💡 <i>'🎯 লাইভ সিগনাল' বাটনে চাপলে পূর্ণাঙ্গ চেকলিস্ট সহ বর্তমান এন্ট্রি অবস্থা জানতে পারবেন।</i>"
             )
             self.bot.send_message(msg, chat_id=chat_id)
         except Exception as e:

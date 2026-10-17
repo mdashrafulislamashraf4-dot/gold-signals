@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 class SignalEngine:
     """
-    টেকনিক্যাল + নিউজ + AI স্কোর কম্বাইন করে
-    চূড়ান্ত ট্রেডিং সিগনাল তৈরি করে
+    টেকনিক্যাল (SMC) + নিউজ + AI স্কোর কম্বাইন করে
+    চূড়ান্ত ইনস্টিটিউশনাল ট্রেডিং সিগনাল ও রিস্ক ম্যানেজমেন্ট পরিচালনা করে
     """
 
     # Weight configuration
@@ -31,6 +31,10 @@ class SignalEngine:
 
     def __init__(self):
         self._init_db()
+
+    def is_daily_loss_limit_reached(self, max_loss_pct: float = None) -> tuple:
+        """Daily loss limit disabled per user preference"""
+        return False, 0.0
 
     # ─────────────────────────────────────────────────────────
     # Database
@@ -97,13 +101,85 @@ class SignalEngine:
         timeframe:        str = "H1",
     ) -> dict:
         """
-        সব এনালাইসিস থেকে চূড়ান্ত সিগনাল তৈরি করে
+        ইনস্টিটিউশনাল মাস্টার স্ট্র্যাটেজি ও মাল্টি-টাইমফ্রেম ডেটা সমন্বয় করে চূড়ান্ত ট্রেডিং সিগনাল তৈরি করে
         """
+        # ── 1. Check if Technical Result is from Master Strategy Pipeline ──
+        if "checklist_score" in technical_result:
+            master_dir = technical_result.get("direction", "NO_TRADE")
+            ai_dir     = ai_result.get("direction", "NEUTRAL")
+            passed     = technical_result.get("passed_count", 0)
+
+            # Strict "No Setup = No Trade"
+            if master_dir in ("BUY", "SELL"):
+                # If AI strongly opposes (e.g. Technical BUY but AI says SELL with >75% conf), caution
+                if (master_dir == "BUY" and ai_dir == "SELL" and ai_result.get("confidence", 0) >= 75) or \
+                   (master_dir == "SELL" and ai_dir == "BUY" and ai_result.get("confidence", 0) >= 75):
+                    direction = "WAIT"
+                    confidence = 55
+                    reasoning = ["⚠️ টেকনিক্যাল সেটআপ তৈরি হলেও AI ম্যাক্রো ভিউ বিপরীত — নিশ্চিত হতে অপেক্ষা করুন।"]
+                else:
+                    direction = master_dir
+                    base_conf = 65 + (passed * 3)  # 7 passed = 86%, 8 passed = 89%, 9 passed = 92%
+                    if ai_dir == master_dir:
+                        base_conf += 5
+                    confidence = min(int(base_conf), 95)
+                    reasoning = technical_result.get("reasoning", [])
+            else:
+                direction = master_dir  # "NO_TRADE" or "WAIT"
+                confidence = 50
+                reasoning = technical_result.get("reasoning", [])
+
+            entry = technical_result.get("entry", current_price)
+            tp1   = technical_result.get("tp1", current_price)
+            tp2   = technical_result.get("tp2", current_price)
+            tp3   = technical_result.get("tp3", current_price)
+            sl    = technical_result.get("sl", current_price)
+            rr_str = technical_result.get("rr_ratio", "1:2.0")
+
+            # Lot size calculation (Assuming $1,000 standard balance and 0.5% risk)
+            if direction in ("BUY", "SELL") and sl != entry:
+                sl_distance = abs(entry - sl)
+                risk_usd = 1000.0 * (RISK_PER_TRADE / 100.0)
+                lot = round(risk_usd / max(sl_distance * 100.0, 10.0), 2)
+                suggested_lot = max(lot, 0.01)
+            else:
+                suggested_lot = 0.0
+
+            signal = {
+                "direction":        direction,
+                "entry":            round(entry, 2),
+                "tp1":              round(tp1, 2),
+                "tp2":              round(tp2, 2),
+                "tp3":              round(tp3, 2),
+                "sl":               round(sl, 2),
+                "confidence":       confidence,
+                "combined_score":   confidence,
+                "tech_score":       int(passed / 9.0 * 100),
+                "news_score":       news_result.get("score", 50),
+                "ai_score":         ai_result.get("confidence", 60),
+                "rr_ratio":         rr_str,
+                "timeframe":        "4H-1H-15m-5m",
+                "risk_level":       "নিম্ন-মাঝারি (Strict 0.5% Risk)",
+                "validity":         "৪-৬ ঘণ্টা (ইন্ট্রাডে সেশন)",
+                "reasoning":        reasoning,
+                "warnings":         ai_result.get("warnings", []),
+                "patterns":         technical_result.get("active_fvgs", []),
+                "risk_per_trade":   RISK_PER_TRADE,
+                "suggested_lot":    suggested_lot,
+                "checklist_score":  technical_result.get("checklist_score", "0/9"),
+                "checklist":        technical_result.get("checklist", []),
+                "liquidity":        technical_result.get("liquidity", {}),
+                "sweep":            technical_result.get("sweep", {}),
+                "session_info":     technical_result.get("liquidity", {}).get("current_session", ""),
+                "timestamp":        datetime.now(pytz.timezone(TIMEZONE)).isoformat(),
+            }
+            return signal
+
+        # ── 2. Fallback Standard Scoring (Backward Compatibility) ──
         tech_score = technical_result.get("score", 50)
         news_score = news_result.get("score", 50)
         ai_conf    = ai_result.get("confidence", 60)
 
-        # Convert AI direction to score
         ai_dir = ai_result.get("direction", "NEUTRAL")
         if ai_dir == "BUY":
             ai_score = 50 + (ai_conf / 2)
@@ -112,14 +188,12 @@ class SignalEngine:
         else:
             ai_score = 50
 
-        # Weighted combined score
         combined_score = (
             tech_score * self.WEIGHTS["technical"] +
             news_score * self.WEIGHTS["news"] +
             ai_score   * self.WEIGHTS["ai"]
         )
 
-        # Determine direction
         if combined_score >= 65:
             direction = "BUY"
         elif combined_score <= 35:
@@ -127,14 +201,12 @@ class SignalEngine:
         else:
             direction = "NEUTRAL"
 
-        # Use AI prices if available, else calculate
         entry = ai_result.get("entry", current_price) or current_price
         tp1   = ai_result.get("tp1", 0)
         tp2   = ai_result.get("tp2", 0)
         tp3   = ai_result.get("tp3", 0)
         sl    = ai_result.get("sl",  0)
 
-        # Fallback: ATR-based TP/SL
         atr = technical_result.get("details", {}).get("ATR", 15)
         if atr is None or atr == 0:
             atr = 15
@@ -154,7 +226,6 @@ class SignalEngine:
                 tp1 = tp2 = tp3 = current_price
                 sl  = current_price
 
-        # Calculate R:R
         if direction in ("BUY", "SELL") and sl != 0 and tp2 != 0:
             risk   = abs(entry - sl)
             reward = abs(tp2 - entry)
@@ -163,10 +234,7 @@ class SignalEngine:
         else:
             rr_str = ai_result.get("rr_ratio", "1:2")
 
-        # Confidence
         confidence = int(min(abs(combined_score - 50) * 2 + 40, 95))
-
-        # Reasoning
         reasoning = (
             ai_result.get("reasoning", []) or
             technical_result.get("buy_signals", [])[:3] or

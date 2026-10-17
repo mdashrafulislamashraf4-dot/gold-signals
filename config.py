@@ -25,15 +25,16 @@ ALPHA_VANTAGE_KEY    = os.getenv("ALPHA_VANTAGE_KEY", "")
 
 # ── System ────────────────────────────────────────────────
 TIMEZONE                = os.getenv("TIMEZONE", "Asia/Dhaka")
-SIGNAL_CHECK_INTERVAL   = int(os.getenv("SIGNAL_CHECK_INTERVAL", "15"))
-RISK_PER_TRADE          = float(os.getenv("RISK_PER_TRADE", "2"))
-MIN_CONFIDENCE          = int(os.getenv("MIN_CONFIDENCE", "65"))
-NEWS_CHECK_INTERVAL     = int(os.getenv("NEWS_CHECK_INTERVAL", "20"))
+SIGNAL_CHECK_INTERVAL   = int(os.getenv("SIGNAL_CHECK_INTERVAL", "5"))
+RISK_PER_TRADE          = float(os.getenv("RISK_PER_TRADE", "0.5"))   # 0.25% - 0.5% per trade
+MIN_CONFIDENCE          = int(os.getenv("MIN_CONFIDENCE", "70"))
+NEWS_CHECK_INTERVAL     = int(os.getenv("NEWS_CHECK_INTERVAL", "15"))
 DAILY_REPORT_TIME       = os.getenv("DAILY_REPORT_TIME", "23:59")
 
 # ── Trading ───────────────────────────────────────────────
 GOLD_SYMBOL  = os.getenv("GOLD_SYMBOL", "GC=F")
-TIMEFRAMES   = os.getenv("TIMEFRAMES", "1h,4h,1d").split(",")
+TIMEFRAMES   = os.getenv("TIMEFRAMES", "4h,1h,15m,5m").split(",")
+MIN_RR_RATIO = float(os.getenv("MIN_RR_RATIO", "1.8"))
 
 # ── Database ──────────────────────────────────────────────
 DB_PATH = os.getenv("DB_PATH", "database/signals.db")

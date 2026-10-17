@@ -72,48 +72,63 @@ class TaskScheduler:
                 logger.info("Market is closed — skipping")
                 return
 
-            # 3) OHLCV data for multiple timeframes
-            primary_tf = TIMEFRAMES[0] if TIMEFRAMES else "1h"
-            df = self.md.get_ohlcv(timeframe=primary_tf, bars=200)
-            if df is None or df.empty:
-                logger.warning("No OHLCV data available")
+            # 3) OHLCV data for Multi-Timeframe Institutional Analysis
+            df_4h  = self.md.get_ohlcv(timeframe="4h", bars=60)
+            df_1h  = self.md.get_ohlcv(timeframe="1h", bars=100)
+            df_15m = self.md.get_ohlcv(timeframe="15m", bars=150)
+            df_5m  = self.md.get_ohlcv(timeframe="5m", bars=60)
+
+            if df_15m is None or df_15m.empty:
+                logger.warning("No 15m OHLCV data available")
                 return
 
-            # 4) Technical Analysis
-            tech_result = self.ta.get_technical_score(df)
-            logger.info(f"Technical score: {tech_result['score']} ({tech_result['direction']})")
-
-            # 5) News & Sentiment
+            # 4) News & Sentiment Analysis
             articles    = self.na.fetch_all_news(api_key=NEWS_API_KEY)
             news_result = self.na.analyze_sentiment(articles)
-            logger.info(f"News sentiment: {news_result['score']} ({news_result['direction']})")
+            news_risk   = (news_result.get("impact") == "HIGH" and len(news_result.get("high_impact_news", [])) >= 2)
+
+            # 5) Institutional Master Strategy (4H Trend -> 1H Bias -> 15m Setup -> 5m Trigger)
+            tech_result = self.ta.analyze_master_strategy(
+                df_4h=df_4h,
+                df_1h=df_1h,
+                df_15m=df_15m,
+                df_5m=df_5m,
+                current_price=price,
+                news_risk=news_risk,
+            )
+            logger.info(f"Master Strategy: {tech_result['direction']} | Checklist: {tech_result['checklist_score']}")
 
             # 6) Correlated assets
             correlated = self.md.get_correlated_assets()
 
-            # 7) AI Analysis
+            # 7) AI Institutional Validation
             ai_result = self.ai.analyze_market(
                 current_price=price,
                 technical_data=tech_result,
                 news_sentiment=news_result,
                 correlated_assets=correlated,
-                timeframe=primary_tf.upper(),
+                timeframe="4H-1H-15m-5m",
             )
             logger.info(f"AI: {ai_result['direction']} ({ai_result['confidence']}%)")
 
-            # 8) Generate Signal
+            # 8) Generate Final Signal
             signal = self.se.generate_signal(
                 technical_result=tech_result,
                 news_result=news_result,
                 ai_result=ai_result,
                 current_price=price,
-                timeframe=primary_tf.upper(),
+                timeframe="4H-1H-15m-5m",
             )
 
             logger.info(f"Final signal: {signal['direction']} | Confidence: {signal['confidence']}%")
 
-            # 9) Send signal if confidence is sufficient
-            if signal["direction"] != "NEUTRAL" and signal["confidence"] >= MIN_CONFIDENCE:
+            # 9) Handle NO_TRADE / WAIT when user manually requests signal
+            if send_regardless and signal["direction"] in ("NO_TRADE", "WAIT", "NEUTRAL"):
+                self.bot.send_no_trade_status(signal, price)
+                return signal
+
+            # 10) Send signal if valid setup and confidence is sufficient
+            if signal["direction"] in ("BUY", "SELL") and signal["confidence"] >= MIN_CONFIDENCE:
                 now_tz = datetime.now(pytz.timezone(TIMEZONE))
                 active_signals = self.se.get_active_signals()
                 same_dir_active = [s for s in active_signals if s["direction"] == signal["direction"]]
@@ -121,8 +136,6 @@ class TaskScheduler:
                 opp_active = [s for s in active_signals if s["direction"] == opp_dir]
 
                 # ── CASE 1: Reversal setup (বিপরীত দিকে মার্কেট পরিবর্তন হলে) ──
-                # ব্যবহারকারীর নির্দেশ: রানিং ট্রেডের বিপরীতে মার্কেট হঠাৎ ঘুরে গেলে (যেমন বাই চলাকালীন ডাউনট্রেন্ড/সেল তৈরি হলে)
-                # তখন শুধু নতুন বিপরীত সিগনাল আসবে এবং আগের পজিশন ক্লোজ হবে।
                 if opp_active:
                     opp_trade = opp_active[0]
                     for opp in opp_active:
@@ -149,7 +162,6 @@ class TaskScheduler:
                     return signal
 
                 # ── CASE 2: Active trade in SAME direction already running ────
-                # ব্যবহারকারীর নির্দেশ: একবার বাই/সেল সিগনাল দেওয়ার পর SL হিট না হওয়া পর্যন্ত একই দিকের নতুন সিগনাল আসবে না বার বার
                 elif same_dir_active:
                     cur_active = same_dir_active[0]
                     act_num = cur_active.get("daily_trade_num") or cur_active.get("id", 1)
@@ -159,7 +171,7 @@ class TaskScheduler:
                     )
                     return signal
 
-                # ── CASE 3: No active signals running (Fresh Setup) ──────────
+                # ── CASE 3: Fresh Setup ──────────────────────────────
                 else:
                     if self._last_signal_time:
                         elapsed_since_signal = (now_tz - self._last_signal_time).total_seconds() / 60
@@ -189,7 +201,7 @@ class TaskScheduler:
                         logger.info(f"Signal skipped (cooldown active: {elapsed_since_signal:.1f}m < 25m, price diff: {price_diff_last:.1f})")
                         return signal
             else:
-                logger.info(f"Signal not sent (confidence: {signal.get('confidence')}%, direction: {signal.get('direction')})")
+                logger.info(f"Signal not sent (direction: {signal.get('direction')}, confidence: {signal.get('confidence')}%)")
 
             return signal
 

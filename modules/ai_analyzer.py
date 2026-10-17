@@ -16,11 +16,15 @@ logger = logging.getLogger(__name__)
 class AIAnalyzer:
     """Gemini AI দিয়ে সম্পূর্ণ গোল্ড মার্কেট এনালাইসিস করে"""
 
-    SYSTEM_PROMPT = """You are an expert XAUUSD (Gold) forex and commodities trader with 20+ years of experience.
-You analyze gold markets using technical analysis, fundamental analysis, news sentiment, and geopolitical factors.
-Always provide precise, actionable trading signals with clear entry, TP, and SL levels.
-Be concise, accurate, and professional. Always consider risk management.
-Respond in a structured JSON-compatible format."""
+    SYSTEM_PROMPT = """You are an elite Institutional XAUUSD (Gold) intraday trader specializing in Smart Money Concepts (SMC), Market Structure (BOS/CHoCH), Liquidity Sweeps (PDH/PDL, Asian Session High/Low, Equal Highs/Lows), Fair Value Gaps (FVG), and Disciplined Risk Management.
+Your core philosophy: "No Setup = No Trade". You NEVER force a trade.
+You strictly require:
+1. Higher timeframe context: 4H Trend and 1H Intraday Bias.
+2. Clear Liquidity Sweep of key levels (PDL/PDH, Asian High/Low, Swing High/Low) followed by institutional displacement.
+3. FVG or Order Block retest with 5m confirmation.
+4. Risk-to-Reward ratio minimum 1:2.
+5. Strict caution around high-impact US economic news (CPI, NFP, FOMC).
+Always output structured trading signals or explicitly state NO_TRADE / WAIT when conditions are not fully met."""
 
     MODELS = [
         "gemini-3.1-flash-lite",
@@ -87,8 +91,82 @@ Respond in a structured JSON-compatible format."""
             return self._fallback_analysis(current_price, technical_data, news_sentiment)
 
     def _build_prompt(self, price, tech, news, corr, tf) -> str:
-        """AI-এর জন্য বিস্তারিত প্রম্পট তৈরি করে"""
+        """AI-এর জন্য বিস্তারিত প্রম্পট তৈরি করে (ইনস্টিটিউশনাল মাস্টার স্ট্র্যাটেজি ও SMC ফোকাস্ড)"""
 
+        # ── 1. MASTER STRATEGY PROMPT ──────────────────────────────
+        if "checklist_score" in tech:
+            liquidity = tech.get("liquidity", {})
+            sweep = tech.get("sweep", {})
+            disp = tech.get("displacement", {})
+            conf_5m = tech.get("confirmation_5m", {})
+            checklist = tech.get("checklist", [])
+
+            checklist_str = "\n".join([
+                f"  [{'PASS' if c['passed'] else 'FAIL'}] {c['num']}. {c['task']}"
+                for c in checklist
+            ])
+
+            key_news = "\n  - ".join(news.get("key_events", [])[:4]) or "কোনো বড় ব্রেকিং ইভেন্ট নেই"
+            sweep_info = sweep.get("sweep_details") or "কোনো সক্রিয় লিকুইডিটি সুইপ নেই"
+
+            prompt = f"""
+You are an expert XAUUSD (Gold) institutional trader executing a strict Multi-Timeframe Intraday Master Strategy.
+CORE PHILOSOPHY: "No Setup = No Trade". DO NOT force a trade if conditions are not clean.
+
+## Live Market Context
+- Current Spot Price: ${price}
+- Current Session: {liquidity.get('current_session', 'N/A')}
+- Timeframe Hierarchy: 4H (Direction) -> 1H (Intraday Bias) -> 15m (Setup / SMC) -> 5m (Precision Trigger)
+
+## Multi-Timeframe Structural Analysis
+1. 4H Trend: {tech.get('trend_4h', 'RANGE')} (4H EMA 200: ${tech.get('ema200_4h', 'N/A')})
+2. 1H Intraday Bias: {tech.get('bias_1h', 'RANGE')} (1H EMA 50: ${tech.get('ema50_1h', 'N/A')})
+3. Liquidity Map:
+   - Previous Day High (PDH): ${liquidity.get('pdh', 'N/A')} | Low (PDL): ${liquidity.get('pdl', 'N/A')}
+   - Asian Session High: ${liquidity.get('asian_high', 'N/A')} | Low: ${liquidity.get('asian_low', 'N/A')}
+4. 15m SMC Setup:
+   - Liquidity Sweep: {sweep_info}
+   - Displacement: Bullish={disp.get('bullish')} / Bearish={disp.get('bearish')} (Body size: ${disp.get('size')} USD)
+   - Active FVGs: {len(tech.get('active_fvgs', []))} found
+5. 5m Confirmation Trigger: {conf_5m.get('reason', 'N/A')}
+6. Volatility (ATR 14): ${tech.get('atr', 15.0)}
+
+## 9-Step Daily Checklist Evaluation (Technical: {tech.get('checklist_score')})
+{checklist_str}
+
+## Macro & News Sentiment
+- Direction: {news.get('direction', 'NEUTRAL')} | Score: {news.get('score', 50)}/100 | Impact: {news.get('impact', 'LOW')}
+- Upcoming Events:
+  - {key_news}
+
+## Trading Rules & Logic:
+- A valid Long Setup requires: Liquidity Sweep of low (SSL / Asian Low / PDL) -> Bullish Displacement + BOS -> FVG Retest -> 5m Bullish Confirmation.
+- A valid Short Setup requires: Liquidity Sweep of high (BSL / Asian High / PDH) -> Bearish Displacement + BOS -> FVG Retest -> 5m Bearish Confirmation.
+- If high-impact news is imminent or setup is incomplete, set SIGNAL to NO_TRADE or WAIT.
+- Keep R:R minimum 1:2.
+
+Format your response EXACTLY like this:
+SIGNAL: [BUY / SELL / NO_TRADE / WAIT]
+CONFIDENCE: [number]%
+ENTRY: [price]
+TP1: [price]
+TP2: [price]
+TP3: [price]
+SL: [price]
+R_R: [ratio like 1:2.5]
+RISK: [কম / মাঝারি]
+VALIDITY: [৪-৬ ঘণ্টা]
+REASONING:
+- [বাংলায় প্রাতিষ্ঠানিক যুক্তি ১ - যেমন: Asian Low সুইপের পর বুলিশ ডিসপ্লেসমেন্ট এসেছে]
+- [বাংলায় প্রাতিষ্ঠানিক যুক্তি ২ - যেমন: 4H ও 1H বুলিশ ট্রেন্ডের সাথে অ্যালাইনমেন্ট আছে]
+- [বাংলায় প্রাতিষ্ঠানিক যুক্তি ৩ - যেমন: 5m ক্যান্ডেলে স্পষ্ট রিজেকশন কনফার্মেশন পাওয়া গেছে]
+WARNINGS:
+- [বাংলায় সতর্কতা ১ - যেমন: আসন্ন মার্কিন ইকোনমিক নিউজের সময় সতর্ক থাকুন]
+- [বাংলায় সতর্কতা ২ - যেমন: সর্বোচ্চ ০.৫% রিস্কের বেশি লট নিবেন না]
+"""
+            return prompt
+
+        # ── 2. STANDARD FALLBACK PROMPT ────────────────────────────
         buy_sigs  = "\n  - ".join(tech.get("buy_signals", [])[:5])
         sell_sigs = "\n  - ".join(tech.get("sell_signals", [])[:5])
         patterns  = ", ".join([p[0] for p in tech.get("patterns", [])]) or "None"
@@ -119,24 +197,13 @@ Analyze XAUUSD (Gold) market and provide a trading signal.
   - Parabolic SAR: ${details.get('PSAR', 'N/A')}
   - Hull MA (HMA 16): ${details.get('HMA_16', 'N/A')}
   - EMA 20: ${details.get('EMA_20', 'N/A')} | EMA 50: ${details.get('EMA_50', 'N/A')} | EMA 200: ${details.get('EMA_200', 'N/A')}
-  - Ichimoku: Tenkan=${details.get('Ichimoku_Tenkan', 'N/A')}, Kijun=${details.get('Ichimoku_Kijun', 'N/A')}
 - Momentum & Oscillators:
   - RSI(14): {details.get('RSI', 'N/A')}
   - MACD: {details.get('MACD', 'N/A')} (Signal: {details.get('MACD_Signal', 'N/A')})
   - Stochastic K: {details.get('Stochastic_K', 'N/A')} | D: {details.get('Stochastic_D', 'N/A')}
-  - Stochastic RSI (Fast): {details.get('StochRSI_K', 'N/A')}
-  - CCI (Commodity Channel Index 20): {details.get('CCI', 'N/A')}
-  - Williams %R: {details.get('Williams_R', 'N/A')}
-  - Awesome Oscillator (AO): {details.get('Awesome_Osc', 'N/A')}
-  - ADX (Trend Strength): {details.get('ADX', 'N/A')}
-- Volatility & Squeeze:
   - ATR (14): ${details.get('ATR', 'N/A')}
-  - Bollinger Bands: Upper=${details.get('BB_Upper', 'N/A')}, Lower=${details.get('BB_Lower', 'N/A')}
-  - TTM Bollinger/Keltner Squeeze: {details.get('Squeeze', 'RELEASED')}
 - Smart Money & Volume:
   - Institutional VWAP: ${details.get('VWAP', 'N/A')}
-  - Money Flow Index (MFI 14): {details.get('MFI', 'N/A')}
-  - Chaikin Money Flow (CMF 20): {details.get('CMF', 'N/A')}
 
 ## Technical Confluence Summary
 - Bullish Indicator Signals ({len(tech.get('buy_signals', []))} count):
@@ -145,14 +212,6 @@ Analyze XAUUSD (Gold) market and provide a trading signal.
   - {sell_sigs}
 - Overall Technical Score: {tech.get('score', 50)}/100
 - Candlestick Patterns: {patterns}
-- Divergences: {", ".join([d[0] for d in tech.get('divergences', [])]) or "None"}
-- Daily Pivot: ${details.get('Pivot_Point', 'N/A')} (Camarilla Breakout H4: ${details.get('Cam_H4', 'N/A')}, L4: ${details.get('Cam_L4', 'N/A')})
-
-## Fibonacci Levels
-{fib_str}
-
-## Correlated Markets
-{corr_str}
 
 ## News Sentiment
 - Sentiment Score: {news.get('score', 50)}/100
@@ -161,15 +220,8 @@ Analyze XAUUSD (Gold) market and provide a trading signal.
 - Key Events:
   - {key_news}
 
-## Your Task
-Provide a complete trading analysis.
-IMPORTANT LANGUAGE REQUIREMENT:
-- Keep SIGNAL strictly as [BUY/SELL/NEUTRAL].
-- Keep numeric numbers (ENTRY, TP1, TP2, TP3, SL, R_R) as numbers.
-- Provide all REASONING (কারণ ও যুক্তি) and WARNINGS (সতর্কতা) strictly in natural, professional BENGALI (বাংলা ভাষায়).
-
 Format your response EXACTLY like this:
-SIGNAL: [BUY/SELL/NEUTRAL]
+SIGNAL: [BUY/SELL/NEUTRAL/NO_TRADE/WAIT]
 CONFIDENCE: [number]%
 ENTRY: [price]
 TP1: [price]
@@ -180,12 +232,10 @@ R_R: [ratio like 1:2.5]
 RISK: [কম/মাঝারি/উচ্চ]
 VALIDITY: [মেয়াদ যেমন ৪-৮ ঘণ্টা]
 REASONING:
-- [বাংলায় কারণ ১ - যেমন: আরএসআই ওভারসোল্ড জোন থেকে বাউন্স করেছে]
-- [বাংলায় কারণ ২ - যেমন: ভূরাজনৈতিক উত্তেজনায় ডলার দুর্বল হচ্ছে]
-- [বাংলায় কারণ ৩ - যেমন: প্রাইস গুরুত্বপূর্ণ ২০০-ইএমএ সাপোর্টের উপরে আছে]
+- [বাংলায় কারণ ১]
+- [বাংলায় কারণ ২]
 WARNINGS:
-- [বাংলায় সতর্কতা ১ - যেমন: আসন্ন মার্কিন সিপিআই নিউজের দিকে নজর রাখুন]
-- [বাংলায় সতর্কতা ২ - যেমন: প্রতি ট্রেডে ২% এর বেশি ঝুঁকি নেবেন না]
+- [বাংলায় সতর্কতা ১]
 """
         return prompt
 
@@ -208,7 +258,6 @@ WARNINGS:
         }
 
         lines = text.strip().split("\n")
-        current_section = None
 
         for line in lines:
             line = line.strip()
@@ -216,11 +265,15 @@ WARNINGS:
                 continue
 
             if line.startswith("SIGNAL:"):
-                val = line.replace("SIGNAL:", "").strip()
-                if "BUY" in val.upper():
+                val = line.replace("SIGNAL:", "").strip().upper()
+                if "BUY" in val:
                     result["direction"] = "BUY"
-                elif "SELL" in val.upper():
+                elif "SELL" in val:
                     result["direction"] = "SELL"
+                elif "WAIT" in val:
+                    result["direction"] = "WAIT"
+                elif "NO_TRADE" in val or "NO TRADE" in val:
+                    result["direction"] = "NO_TRADE"
                 else:
                     result["direction"] = "NEUTRAL"
 
