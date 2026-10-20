@@ -18,6 +18,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from config import (
+    ENABLE_NEWS_ALERTS, ENABLE_REPORTS, ENABLE_VOLATILITY_ALERTS, ENABLE_MARKET_STATUS_ALERTS,
     TIMEZONE, SIGNAL_CHECK_INTERVAL, NEWS_CHECK_INTERVAL_SECONDS, NEWS_CHECK_INTERVAL, DAILY_REPORT_TIME,
     MIN_CONFIDENCE, NEWS_API_KEY, TIMEFRAMES,
 )
@@ -404,7 +405,8 @@ class TaskScheduler:
                     "impact": "HIGH",
                 }
 
-                self.bot.send_news_alert(news_item, ai_analysis)
+                if ENABLE_NEWS_ALERTS:
+                    self.bot.send_news_alert(news_item, ai_analysis)
                 self.na.record_evaluated_news(title, status="APPROVED")
                 self.na.record_sent_news(title, source, impact="HIGH")
                 self._last_news_alert_time = now
@@ -422,7 +424,8 @@ class TaskScheduler:
         try:
             logger.info("Generating daily report...")
             stats = self.se.get_daily_stats()
-            self.bot.send_daily_report(stats)
+            if ENABLE_REPORTS:
+                self.bot.send_daily_report(stats)
             logger.info("Daily report sent")
         except Exception as e:
             logger.error(f"Daily report error: {e}")
@@ -440,7 +443,8 @@ class TaskScheduler:
                 ai_summary = self.ai.generate_weekly_summary(
                     stats.get("signals", []), stats.get("win_rate", 0)
                 )
-            self.bot.send_weekly_report(stats, ai_summary)
+            if ENABLE_REPORTS:
+                self.bot.send_weekly_report(stats, ai_summary)
             logger.info("Weekly report sent")
         except Exception as e:
             logger.error(f"Weekly report error: {e}")

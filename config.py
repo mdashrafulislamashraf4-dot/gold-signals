@@ -31,6 +31,12 @@ MIN_CONFIDENCE              = int(os.getenv("MIN_CONFIDENCE", "70"))
 NEWS_CHECK_INTERVAL_SECONDS = int(os.getenv("NEWS_CHECK_INTERVAL_SECONDS", os.getenv("NEWS_CHECK_INTERVAL", "30")))
 NEWS_CHECK_INTERVAL         = NEWS_CHECK_INTERVAL_SECONDS  # backward compatibility
 DAILY_REPORT_TIME           = os.getenv("DAILY_REPORT_TIME", "23:59")
+# ── Notification Filters (শুধুমাত্র ট্রেডিং সিগনাল আসবে) ─────
+ENABLE_NEWS_ALERTS          = os.getenv("ENABLE_NEWS_ALERTS", "False").lower() in ("true", "1")
+ENABLE_REPORTS              = os.getenv("ENABLE_REPORTS", "False").lower() in ("true", "1")
+ENABLE_VOLATILITY_ALERTS    = os.getenv("ENABLE_VOLATILITY_ALERTS", "False").lower() in ("true", "1")
+ENABLE_MARKET_STATUS_ALERTS = os.getenv("ENABLE_MARKET_STATUS_ALERTS", "False").lower() in ("true", "1")
+
 
 # ── Trading ───────────────────────────────────────────────
 GOLD_SYMBOL  = os.getenv("GOLD_SYMBOL", "GC=F")

@@ -12,7 +12,7 @@ from typing import Optional, Union
 
 import requests
 
-from config import SIGNAL_CHECK_INTERVAL
+from config import SIGNAL_CHECK_INTERVAL, ENABLE_NEWS_ALERTS, ENABLE_REPORTS, ENABLE_VOLATILITY_ALERTS, ENABLE_MARKET_STATUS_ALERTS
 
 logger = logging.getLogger(__name__)
 
@@ -604,6 +604,8 @@ class TelegramBot:
     # Market Open / Close Alerts (বাংলায়)
     # ─────────────────────────────────────────────────────────
     def send_market_closed_alert(self, reason: str = "scheduled", last_price: float = 0) -> bool:
+        if not ENABLE_MARKET_STATUS_ALERTS:
+            return False
         """মার্কেট বন্ধ হলে টেলিগ্রামে জানায়"""
         price_str = f"\n💰 <b>শেষ লাইভ প্রাইস:</b> <code>${last_price}</code>" if last_price else ""
         if reason == "weekend":
@@ -623,6 +625,8 @@ class TelegramBot:
         return self.send_message(msg)
 
     def send_market_opened_alert(self, price: float = 0) -> bool:
+        if not ENABLE_MARKET_STATUS_ALERTS:
+            return False
         """মার্কেট খুললে টেলিগ্রামে জানায়"""
         price_str = f"\n💰 <b>ওপেনিং প্রাইস:</b> <code>${price}</code>" if price else ""
         msg = (
@@ -636,6 +640,8 @@ class TelegramBot:
         return self.send_message(msg)
 
     def send_market_closed_unexpected_alert(self, reason: str = "", price: float = 0) -> bool:
+        if not ENABLE_MARKET_STATUS_ALERTS:
+            return False
         """হঠাৎ বা অপ্রত্যাশিত কারণে মার্কেট বন্ধ হলে জানায়"""
         price_str = f"\n💰 <b>শেষ প্রাইস:</b> <code>${price}</code>" if price else ""
         reason_str = f"\n⚠️ <b>সম্ভাব্য কারণ:</b> {reason}" if reason else ""
@@ -686,17 +692,25 @@ class TelegramBot:
         return self.send_message(msg)
 
     def send_news_alert(self, news: dict, ai_analysis: str = "") -> bool:
+        if not ENABLE_NEWS_ALERTS:
+            return False
         msg = self.format_news_alert(news, ai_analysis)
         return self.send_message(msg)
 
     def send_volatility_alert(self, current_price: float, diff: float, duration_mins: int = 5) -> bool:
+        if not ENABLE_VOLATILITY_ALERTS:
+            return False
         msg = self.format_volatility_alert(current_price, diff, duration_mins)
         return self.send_message(msg)
 
     def send_daily_report(self, stats: dict) -> bool:
+        if not ENABLE_REPORTS:
+            return False
         msg = self.format_daily_report(stats)
         return self.send_message(msg)
 
     def send_weekly_report(self, stats: dict, ai_summary: str = "") -> bool:
+        if not ENABLE_REPORTS:
+            return False
         msg = self.format_weekly_report(stats, ai_summary)
         return self.send_message(msg)
