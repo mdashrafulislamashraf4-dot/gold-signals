@@ -18,7 +18,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from config import (
-    TIMEZONE, SIGNAL_CHECK_INTERVAL, NEWS_CHECK_INTERVAL, DAILY_REPORT_TIME,
+    TIMEZONE, SIGNAL_CHECK_INTERVAL, NEWS_CHECK_INTERVAL_SECONDS, NEWS_CHECK_INTERVAL, DAILY_REPORT_TIME,
     MIN_CONFIDENCE, NEWS_API_KEY, TIMEFRAMES,
 )
 
@@ -50,6 +50,12 @@ class TaskScheduler:
         self._last_spike_alert_time = None
         self._last_news_alert_time  = None
 
+        # Market status tracking for open/close notifications
+        self._market_was_open         = None   # None = unknown (startup)
+        self._consecutive_no_price    = 0      # count consecutive failures to fetch price
+        self._unexpected_close_alerted = False  # prevent spam unexpected-close alerts
+        self._last_market_status_alert = None   # last time a market status alert was sent
+
     # ─────────────────────────────────────────────────────────
     # Core Analysis Task
     # ─────────────────────────────────────────────────────────
@@ -77,6 +83,7 @@ class TaskScheduler:
             df_1h  = self.md.get_ohlcv(timeframe="1h", bars=100)
             df_15m = self.md.get_ohlcv(timeframe="15m", bars=150)
             df_5m  = self.md.get_ohlcv(timeframe="5m", bars=60)
+            df_1m  = self.md.get_ohlcv(timeframe="1m", bars=60)
 
             if df_15m is None or df_15m.empty:
                 logger.warning("No 15m OHLCV data available")
@@ -85,7 +92,18 @@ class TaskScheduler:
             # 4) News & Sentiment Analysis
             articles    = self.na.fetch_all_news(api_key=NEWS_API_KEY)
             news_result = self.na.analyze_sentiment(articles)
-            news_risk   = (news_result.get("impact") == "HIGH" and len(news_result.get("high_impact_news", [])) >= 2)
+
+            # News risk is active ONLY during recent breaking news alerts or violent spikes (within 15 min)
+            now_tz = datetime.now(pytz.timezone(TIMEZONE))
+            news_risk = False
+            if self._last_news_alert_time:
+                elapsed_news = (now_tz - self._last_news_alert_time).total_seconds() / 60
+                if elapsed_news <= 15:
+                    news_risk = True
+            if self._last_spike_alert_time:
+                elapsed_spike = (now_tz - self._last_spike_alert_time).total_seconds() / 60
+                if elapsed_spike <= 10:
+                    news_risk = True
 
             # 5) Institutional Master Strategy (4H Trend -> 1H Bias -> 15m Setup -> 5m Trigger)
             tech_result = self.ta.analyze_master_strategy(
@@ -95,6 +113,7 @@ class TaskScheduler:
                 df_5m=df_5m,
                 current_price=price,
                 news_risk=news_risk,
+                df_1m=df_1m,
             )
             logger.info(f"Master Strategy: {tech_result['direction']} | Checklist: {tech_result['checklist_score']}")
 
@@ -165,6 +184,37 @@ class TaskScheduler:
                 elif same_dir_active:
                     cur_active = same_dir_active[0]
                     act_num = cur_active.get("daily_trade_num") or cur_active.get("id", 1)
+                    tp_hit = cur_active.get("tp_hit", 0)
+                    cur_entry = cur_active.get("entry_price", price)
+                    price_diff_entry = abs(price - cur_entry)
+
+                    # If previous trade already secured (TP1 hit) or price moved significantly (>= $4.0),
+                    # allow sending as an ADDITIONAL trade setup (e.g. scalp or continuation setup)
+                    if (tp_hit >= 1 or price_diff_entry >= 4.0):
+                        if self._last_signal_time:
+                            elapsed_since_signal = (now_tz - self._last_signal_time).total_seconds() / 60
+                        else:
+                            elapsed_since_signal = 999
+
+                        price_diff_last = abs(price - self._last_signal_price) if self._last_signal_price else 999
+                        if elapsed_since_signal >= 12 or price_diff_last >= 2.5 or send_regardless:
+                            signal["setup_type"] = "ADDITIONAL"
+                            signal["active_ref"] = {
+                                "id": cur_active["id"],
+                                "daily_trade_num": act_num,
+                                "direction": cur_active["direction"],
+                                "entry": cur_entry,
+                            }
+                            sig_id = self.se.save_signal(signal)
+                            signal["id"] = sig_id
+
+                            self.bot.send_signal(signal, price)
+                            self._last_signal_dir = signal["direction"]
+                            self._last_signal_time = now_tz
+                            self._last_signal_price = price
+                            logger.info(f"Additional Signal #{sig_id} sent to Telegram: {signal['direction']} (while #{cur_active['id']} running)")
+                            return signal
+
                     logger.info(
                         f"Active {signal['direction']} trade #{cur_active['id']} (আজকের ট্রেড #{act_num}) "
                         f"is already running. Skipping duplicate {signal['direction']} signal until SL/TP hit."
@@ -185,7 +235,7 @@ class TaskScheduler:
                     elif signal["direction"] != self._last_signal_dir:
                         should_send = True
                     else:
-                        should_send = (elapsed_since_signal >= 25) or (price_diff_last >= 3.0)
+                        should_send = (elapsed_since_signal >= 12) or (price_diff_last >= 2.0)
 
                     if should_send:
                         sig_id = self.se.save_signal(signal)
@@ -198,7 +248,7 @@ class TaskScheduler:
                         logger.info(f"Fresh Signal #{sig_id} sent to Telegram: {signal['direction']}")
                         return signal
                     else:
-                        logger.info(f"Signal skipped (cooldown active: {elapsed_since_signal:.1f}m < 25m, price diff: {price_diff_last:.1f})")
+                        logger.info(f"Signal skipped (cooldown active: {elapsed_since_signal:.1f}m < 12m, price diff: {price_diff_last:.1f})")
                         return signal
             else:
                 logger.info(f"Signal not sent (direction: {signal.get('direction')}, confidence: {signal.get('confidence')}%)")
@@ -270,17 +320,53 @@ class TaskScheduler:
             logger.error(f"Volatility monitor error: {e}")
 
     # ─────────────────────────────────────────────────────────
-    # News Monitor (শুধুমাত্র বড় মার্কেট মুভার ব্রেকিং নিউজ)
+    # News Monitor (প্রতি ৩০ সেকেন্ডে ব্রেকিং নিউজ ওয়াচডগ)
     # ─────────────────────────────────────────────────────────
+
+    # Market Status Monitor - mMarket Open/Close
+    def monitor_market_status(self):
+        try:
+            weekday = datetime.now().weekday()
+            is_open_scheduled = self.md.is_market_open()
+            price = self.md.get_current_price()
+            if price:
+                self._consecutive_no_price = 0
+                self._unexpected_close_alerted = False
+            else:
+                self._consecutive_no_price += 1
+            if is_open_scheduled and self._consecutive_no_price >= 3:
+                if not self._unexpected_close_alerted:
+                    logger.warning('Unexpected market closure no price data!')
+                    self.bot.send_market_closed_unexpected_alert(
+                        reason='Live price data unavailable - possible exchange/broker circuit breaker.'
+                    )
+                    self._unexpected_close_alerted = True
+                    self._market_was_open = False
+                return
+            if self._market_was_open is True and not is_open_scheduled:
+                reason = 'friday_close' if weekday == 4 else ('weekend' if weekday == 5 else 'scheduled')
+                logger.info(f'Market closed reason={reason}')
+                self.bot.send_market_closed_alert(reason=reason, last_price=price or 0)
+                self._market_was_open = False
+            elif self._market_was_open is False and is_open_scheduled and price:
+                logger.info('Market opened!')
+                self.bot.send_market_opened_alert(price=price)
+                self._market_was_open = True
+            elif self._market_was_open is None:
+                self._market_was_open = is_open_scheduled and bool(price)
+                state = 'OPEN' if self._market_was_open else 'CLOSED'
+                logger.info(f'Market initial state: {state}')
+        except Exception as e:
+            logger.error(f'Market status monitor error: {e}')
+
     def monitor_news(self):
-        """বড় আন্তর্জাতিক যুদ্ধ বা উচ্চ মাত্রার ব্রেকিং নিউজ যাচাই করে এলার্ট পাঠায়"""
+        """গোল্ড মার্কেটে প্রভাব ফেলতে পারে এমন খবর প্রতি ৩০ সেকেন্ডে যাচাই করে তাৎক্ষণিক অ্যালার্ট পাঠায়"""
         try:
             now = datetime.now()
-            # Cooldown: Minimum 45 minutes between automatic news alerts to prevent spam
+            # Cooldown: Minimum 45 seconds between consecutive alerts to prevent flood
             if self._last_news_alert_time:
-                elapsed_mins = (now - self._last_news_alert_time).total_seconds() / 60
-                if elapsed_mins < 45:
-                    logger.debug(f"News alert cooldown active ({elapsed_mins:.1f}m < 45m)")
+                elapsed_secs = (now - self._last_news_alert_time).total_seconds()
+                if elapsed_secs < 45:
                     return
 
             articles = self.na.fetch_all_news(api_key=NEWS_API_KEY)
@@ -294,21 +380,23 @@ class TaskScheduler:
                 if not title:
                     continue
 
-                # 1. Filter out routine forecasts, commentary, and minor news
+                # 1. Skip if already evaluated by AI or previously processed
+                if self.na.is_news_already_evaluated(title):
+                    continue
+
+                # 2. Filter candidate market-moving news
                 if not self.na.is_candidate_breaking_news(article):
+                    self.na.record_evaluated_news(title, status="FILTERED")
                     continue
 
-                # 2. Check if already sent in DB
-                if self.na.is_news_already_sent(title):
-                    continue
-
-                # 3. AI Verification: Ask Gemini if this is a genuine high-impact market shock
+                # 3. AI Verification & Impact Analysis: Ask Gemini if this affects Gold
                 ai_analysis = self.ai.evaluate_breaking_news(title, summary, price)
                 if not ai_analysis:
-                    logger.info(f"News skipped by AI filter (minor/routine/forecast): {title[:60]}")
+                    logger.info(f"News skipped by AI filter (routine/minor): {title[:60]}")
+                    self.na.record_evaluated_news(title, status="SKIPPED")
                     continue
 
-                # 4. Genuine major breaking news confirmed!
+                # 4. Genuine market-moving news confirmed!
                 news_item = {
                     "title":  title,
                     "source": source,
@@ -317,10 +405,11 @@ class TaskScheduler:
                 }
 
                 self.bot.send_news_alert(news_item, ai_analysis)
+                self.na.record_evaluated_news(title, status="APPROVED")
                 self.na.record_sent_news(title, source, impact="HIGH")
                 self._last_news_alert_time = now
-                logger.warning(f"🚨 Major breaking news alert sent: {title[:65]}")
-                break  # Send max 1 alert per check cycle
+                logger.warning(f"🚨 Major market-moving news alert sent: {title[:65]}")
+                break  # Send max 1 alert per 30s cycle to ensure smooth delivery
 
         except Exception as e:
             logger.error(f"News monitor error: {e}")
@@ -392,16 +481,25 @@ class TaskScheduler:
             replace_existing=True,
         )
 
-        # 4) News monitoring — every NEWS_CHECK_INTERVAL minutes (default 20m)
+        # 4) News monitoring — every NEWS_CHECK_INTERVAL_SECONDS seconds (default 30s)
         self.scheduler.add_job(
             self.monitor_news,
-            IntervalTrigger(minutes=NEWS_CHECK_INTERVAL),
+            IntervalTrigger(seconds=NEWS_CHECK_INTERVAL_SECONDS),
             id="news_monitor",
-            name=f"আন্তর্জাতিক ব্রেকিং নিউজ ওয়াচডগ (প্রতি {NEWS_CHECK_INTERVAL} মিনিট)",
+            name=f"ব্রেকিং নিউজ ওয়াচডগ (প্রতি {NEWS_CHECK_INTERVAL_SECONDS} সেকেন্ড)",
             replace_existing=True,
         )
 
-        # 5) Daily report — রাত ১১:৫৯ মিনিটে (Bangladesh time)
+        # 5) Market status monitor — every 60 seconds (open/close/unexpected close alerts)
+        self.scheduler.add_job(
+            self.monitor_market_status,
+            IntervalTrigger(seconds=60),
+            id="market_status_monitor",
+            name="মার্কেট স্ট্যাটাস মনিটর (প্রতি ৬০ সেকেন্ড)",
+            replace_existing=True,
+        )
+
+        # 6) Daily report — রাত ১১:৫৯ মিনিটে (Bangladesh time)
         report_hour, report_min = DAILY_REPORT_TIME.split(":")
         self.scheduler.add_job(
             self.send_daily_report,
@@ -426,7 +524,8 @@ class TaskScheduler:
         logger.info(f"  📊 Signal check: every {SIGNAL_CHECK_INTERVAL} min")
         logger.info(f"  🔍 TP/SL monitor: every 1 min")
         logger.info(f"  ⚡ Volatility spike watchdog: every 45 sec")
-        logger.info(f"  📰 News watchdog: every {NEWS_CHECK_INTERVAL} min (বড় খবর যাচাই)")
+        logger.info(f"  📰 News watchdog: every {NEWS_CHECK_INTERVAL_SECONDS} sec (বড় খবর যাচাই)")
+        logger.info(f"  🔔 Market status monitor: every 60 sec (মার্কেট খোলা/বন্ধ নোটিফিকেশন)")
         logger.info(f"  📋 Daily report: {DAILY_REPORT_TIME} ({TIMEZONE})")
         logger.info(f"  📅 Weekly report: Friday 17:30 ({TIMEZONE})")
 

@@ -139,15 +139,18 @@ class TelegramBot:
             ref_num = active_ref.get("daily_trade_num") or active_ref.get("id", "")
             ref_dir = active_ref.get("direction", "")
             extra_line = f"⚠️ <i>পূর্ববর্তী ট্রেড #{ref_num} {ref_dir} ক্লোজ করে নতুন ট্রেন্ড এন্ট্রি</i>\n"
+        elif setup_type == "SCALP":
+            header = f"⚡ <b>আজকের ট্রেড #{trade_num} — কুইক স্ক্যাল্প সেটাপ (XAUUSD)</b>"
+            extra_line = ""
         else:
-            header = f"🎯 <b>আজকের ট্রেড #{trade_num} — মাস্টার স্ট্র্যাটেজি (XAUUSD)</b>"
+            header = f"🎯 <b>আজকের ট্রেড #{trade_num} — মাস্টার সুইং সেটাপ (XAUUSD)</b>"
             extra_line = ""
 
         # Confluence bullet points
         reasons = signal.get("reasoning", [])
         reason_text = ""
         if reasons:
-            reason_text = "\n💡 <b>সেটআপ লজিক:</b>\n" + "\n".join([f"  • {r}" for r in reasons[:3]]) + "\n"
+            reason_text = "\n💡 <b>সেটআপ লজিক (SMC & টেকনিক্যাল):</b>\n" + "\n".join([f"  • {r}" for r in reasons[:4]]) + "\n"
 
         chk_badge = f" | 📋 চেকলিস্ট: <b>{checklist_score} পাস</b>" if checklist_score else ""
 
@@ -171,9 +174,9 @@ class TelegramBot:
     def format_no_trade_message(self, data: dict, current_price: float) -> str:
         """ভালো সেটআপ না থাকলে নো-ট্রেড স্ট্যাটাস ও লিকুইডিটি ম্যাপ বাংলায় ফরম্যাট করে"""
         liquidity = data.get("liquidity", {})
-        session = liquidity.get("current_session", "সাধারণ সেশন")
-        score = data.get("checklist_score", "0/9")
-        reasons = data.get("reasoning", ["পারফেক্ট ইনস্টিটিউশনাল কনফার্মেশন অপেক্ষমান"])
+        session = liquidity.get("current_session", "সার্বক্ষণিক সেশন")
+        score = data.get("checklist_score", "0/12")
+        reasons = data.get("reasoning", ["হাই-প্রোবাবিলিটি কনফার্মেশন অপেক্ষমান"])
 
         reason_str = "\n".join([f"  • {r}" for r in reasons[:3]])
 
@@ -185,19 +188,19 @@ class TelegramBot:
         return f"""🟡 <b>মার্কেট স্ট্যাটাস: No Trade (অপেক্ষা করুন)</b>
 ━━━━━━━━━━━━━━━━━
 💰 <b>বর্তমান XAUUSD প্রাইস:</b> <code>${current_price}</code>
-⏱️ <b>বর্তমান সেশন:</b> {session}
+⏱️ <b>মার্কেট সেশন:</b> {session} (সার্বক্ষণিক নজরদারি সক্রিয়)
 📈 <b>4H ট্রেন্ড:</b> <b>{data.get('trend_4h', 'N/A')}</b> | 🎯 <b>1H বায়াস:</b> <b>{data.get('bias_1h', 'N/A')}</b>
 
-🗺️ <b>লিকুইডিটি ম্যাপ (SMC):</b>
+🗺️ <b>লিকুইডিটি ম্যাপ (SMC Pools):</b>
   • Asian Session: High <code>${ah}</code> | Low <code>${al}</code>
   • Previous Day: High <code>${pdh}</code> | Low <code>${pdl}</code>
 
-📋 <b>মাস্টার স্ট্র্যাটেজি চেকলিস্ট:</b> <b>{score} উত্তীর্ণ</b>
+📋 <b>১২-কম্পোনেন্ট চেকলিস্ট:</b> <b>{score} উত্তীর্ণ</b>
 ⚡ <b>বর্তমান অবস্থা:</b>
 {reason_str}
 
 ━━━━━━━━━━━━━━━━━
-💡 <i>'No Setup = No Trade' — প্রতিদিন ট্রেড নেওয়া লক্ষ্য নয়, ভালো সেটআপ এলে তবেই এন্ট্রি।</i>"""
+💡 <i>'No Setup = No Trade' — বড় সুইং বা ছোট স্ক্যাল্প সেটাপ নিশ্চিত হওয়ার সাথে সাথে স্বয়ংক্রিয় সিগন্যাল আসবে।</i>"""
 
     # ─────────────────────────────────────────────────────────
     # TP/SL Hit Alert (বাংলায়)
@@ -289,7 +292,7 @@ class TelegramBot:
 ⚡ <b>প্রভাবের মাত্রা:</b> <b>{impact_text}</b>
 """
         if impact_analysis:
-            msg += f"\n🤖 <b>এআই প্রভাব বিশ্লেষণ ও পরামর্শ:</b>\n{impact_analysis}\n"
+            msg += f"\n🤖 <b>এআই প্রভাব ও কারণ বিশ্লেষণ:</b>\n{impact_analysis}\n"
 
         if link:
             msg += f'\n🔗 <a href="{link}">সম্পূর্ণ সংবাদ পড়ুন</a>'
@@ -575,7 +578,7 @@ class TelegramBot:
 
 🎯 <b>লাইভ সিগনাল:</b> বর্তমান সেরা BUY/SELL ট্রেডিং সিগনাল
 💰 <b>গোল্ড লাইভ প্রাইস:</b> TradingView-এর হুবহু লাইভ দাম
-🔍 <b>টেকনিক্যাল এনালাইসিস:</b> ১২+ ইন্ডিকেটর ও চার্ট প্যাটার্ন
+🔍 <b>টেকনিক্যাল এনালাইসিস:</b> ৩০+ ইন্ডিকেটর, SMC ও চার্ট প্যাটার্ন
 📰 <b>ব্রেকিং নিউজ ও প্রভাব:</b> গোল্ডে প্রভাব ফেলে এমন বিশ্ব সংবাদ
 📅 <b>আজকের ইকোনমিক ইভেন্ট:</b> গুরুত্বপূর্ণ অর্থনৈতিক ক্যালেন্ডার
 📊 <b>আজকের রিপোর্ট:</b> সারাদিনের লাভ-লস ও পারফরম্যান্স
@@ -596,6 +599,56 @@ class TelegramBot:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 ⚠️ <b>সোনালী নিয়ম:</b> প্রতিটি ট্রেডে অ্যাকাউন্টের সর্বোচ্চ ১-২% এর বেশি ঝুঁকি নেবেন না!"""
+
+    # ─────────────────────────────────────────────────────────
+    # Market Open / Close Alerts (বাংলায়)
+    # ─────────────────────────────────────────────────────────
+    def send_market_closed_alert(self, reason: str = "scheduled", last_price: float = 0) -> bool:
+        """মার্কেট বন্ধ হলে টেলিগ্রামে জানায়"""
+        price_str = f"\n💰 <b>শেষ লাইভ প্রাইস:</b> <code>${last_price}</code>" if last_price else ""
+        if reason == "weekend":
+            detail = "📅 <b>সাপ্তাহিক ছুটি (শনিবার)</b> — গোল্ড বাজার বন্ধ।\n🕐 পুনরায় চালু: রবিবার রাত ১০:০০ PM UTC (সোমবার ভোর ৪টা BD সময়)"
+        elif reason == "friday_close":
+            detail = "📅 <b>শুক্রবার মার্কেট ক্লোজড</b> — সাপ্তাহিক ট্রেডিং সেশন শেষ।\n🕐 পুনরায় চালু: রবিবার রাত ১০:০০ PM UTC (সোমবার ভোর ৪টা BD সময়)"
+        else:
+            detail = "মার্কেট বন্ধ। পুনরায় চালু হলে সাথে সাথে জানানো হবে।"
+        msg = (
+            "🔴 <b>গোল্ড মার্কেট বন্ধ হয়েছে (Market Closed)</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{detail}{price_str}\n\n"
+            "⏸️ <i>মার্কেট বন্ধ থাকায় কোনো নতুন সিগনাল বা অ্যালার্ট আসবে না।</i>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🤖 <i>এআই গোল্ড সিস্টেম সার্বক্ষণিক পর্যবেক্ষণ করছে।</i>"
+        )
+        return self.send_message(msg)
+
+    def send_market_opened_alert(self, price: float = 0) -> bool:
+        """মার্কেট খুললে টেলিগ্রামে জানায়"""
+        price_str = f"\n💰 <b>ওপেনিং প্রাইস:</b> <code>${price}</code>" if price else ""
+        msg = (
+            "🟢 <b>গোল্ড মার্কেট চালু হয়েছে (Market Opened)!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ <b>XAUUSD ট্রেডিং সেশন শুরু হয়েছে!</b>{price_str}\n\n"
+            "🔍 <i>মার্কেট বিশ্লেষণ শুরু হচ্ছে — ভালো সেটাপ পেলেই BUY/SELL সিগনাল পাঠানো হবে।</i>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🤖 <i>এআই গোল্ড সিস্টেম সক্রিয়।</i>"
+        )
+        return self.send_message(msg)
+
+    def send_market_closed_unexpected_alert(self, reason: str = "", price: float = 0) -> bool:
+        """হঠাৎ বা অপ্রত্যাশিত কারণে মার্কেট বন্ধ হলে জানায়"""
+        price_str = f"\n💰 <b>শেষ প্রাইস:</b> <code>${price}</code>" if price else ""
+        reason_str = f"\n⚠️ <b>সম্ভাব্য কারণ:</b> {reason}" if reason else ""
+        msg = (
+            "⚠️ <b>গোল্ড মার্কেট হঠাৎ বন্ধ হয়েছে (Unexpected Close)!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🚨 মার্কেট অপ্রত্যাশিতভাবে বন্ধ হয়ে গেছে বা প্রাইস ডেটা পাওয়া যাচ্ছে না।"
+            f"{reason_str}{price_str}\n\n"
+            "🔍 <i>যদি আপনার কোনো ট্রেড চালু থাকে, অনুগ্রহ করে ব্রোকার প্ল্যাটফর্মে সরাসরি যাচাই করুন।</i>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🤖 <i>সিস্টেম পুনরায় চেক করছে — মার্কেট চালু হলে সাথে সাথে জানানো হবে।</i>"
+        )
+        return self.send_message(msg)
 
     # ─────────────────────────────────────────────────────────
     # Startup Message (বাংলায়)

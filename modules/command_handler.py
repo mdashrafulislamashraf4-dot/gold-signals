@@ -247,6 +247,7 @@ class CommandHandler:
             df_1h  = self.md.get_ohlcv(timeframe="1h", bars=100)
             df_15m = self.md.get_ohlcv(timeframe="15m", bars=150)
             df_5m  = self.md.get_ohlcv(timeframe="5m", bars=60)
+            df_1m  = self.md.get_ohlcv(timeframe="1m", bars=60)
 
             tech = self.ta.analyze_master_strategy(
                 df_4h=df_4h,
@@ -254,6 +255,7 @@ class CommandHandler:
                 df_15m=df_15m,
                 df_5m=df_5m,
                 current_price=price,
+                df_1m=df_1m,
             )
 
             if tech.get("direction") in ("BUY", "SELL"):
@@ -268,25 +270,29 @@ class CommandHandler:
             self.bot.send_message(f"❌ এনালাইসিস করতে সমস্যা হয়েছে: {e}", chat_id=chat_id)
 
     def _cmd_checklist(self, chat_id: str):
-        """📋 মাস্টার স্ট্র্যাটেজি চেকলিস্ট"""
-        msg = """📋 <b>XAUUSD Intraday Master Strategy — ৯-দফা চেকলিস্ট</b>
+        """📋 ১২-দফা প্রাতিষ্ঠানিক চেকলিস্ট ও নিয়ম"""
+        msg = """📋 <b>XAUUSD প্রাতিষ্ঠানিক ডুয়াল-ইঞ্জিন — ১২-দফা চেকলিস্ট</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-প্রতিটি ট্রেডের পূর্বে এই ৯টি ধাপ কঠোরভাবে যাচাই করা হয়:
+বড় সুইং বা ছোট স্ক্যাল্প প্রতিটি ট্রেডের পূর্বে এই ১২টি ধাপ যাচাই করা হয়:
 
-1️⃣ <b>Economic Calendar:</b> আসন্ন High-impact News (CPI, NFP, FOMC) দেখা
-2️⃣ <b>4H Market Trend:</b> বড় ট্রেন্ড ও সুইং হাই/লো (Direction)
-3️⃣ <b>1H Intraday Bias:</b> আজ Buy/Sell নাকি Range (EMA 50/200)
-4️⃣ <b>Liquidity Map:</b> PDH/PDL ও Asian Session High/Low চিহ্নিত করা
-5️⃣ <b>15m SMC Setup:</b> Liquidity Sweep, Displacement ও BOS/CHoCH
-6️⃣ <b>5m Confirmation:</b> রিজেকশন ক্যান্ডেল ও FVG রিটেস্ট অপেক্ষা
-7️⃣ <b>SL, TP & R:R:</b> ইনভ্যালিডেশনের নিচে SL এবং কমপক্ষে 1:2 R:R
-8️⃣ <b>Risk Rules:</b> ০.৫% রিস্ক এবং স্প্রেড সহনশীলতা যাচাই
-9️⃣ <b>Trade Journal:</b> এন্ট্রির কারণ ও ফলাফল রেকর্ড করা
+1️⃣ <b>Market Structure:</b> BOS / CHoCH (ক্যান্ডেল বডি ক্লোজ বনাম উইক)
+2️⃣ <b>Liquidity:</b> BSL / SSL, Equal Highs/Lows ও Major Sweeps
+3️⃣ <b>Displacement & FVG:</b> শক্তিশালী মুভ ও আনমিটিগেটেড ইমব্যালেন্স
+4️⃣ <b>Order Block (OB):</b> প্রাতিষ্ঠানিক ডিমান্ড ও সাপ্লাই জোন রিঅ্যাকশন
+5️⃣ <b>EMA 20/50/200:</b> স্বল্প ও দীর্ঘমেয়াদি ট্রেন্ড অ্যালাইনমেন্ট
+6️⃣ <b>RSI 14 & Divergence:</b> মোমেন্টাম ও ফলস ব্রেকআউট রিভার্সাল
+7️⃣ <b>ATR 14 Volatility:</b> ডায়নামিক ও লজিক্যাল SL ও TP বাফার
+8️⃣ <b>VWAP:</b> ইন্ট্রাডে গড় ভ্যালুয়েশন ও প্রাতিষ্ঠানিক অবস্থান
+9️⃣ <b>MACD:</b> মোমেন্টাম বৃদ্ধি বা হ্রাস যাচাই
+🔟 <b>Premium / Discount / OTE:</b> ডিসকাউন্টে বাই ও প্রিমিয়ামে সেল
+1️⃣1️⃣ <b>5M Confirmation:</b> ক্যান্ডেল ক্লোজ ও রিজেকশন পিন বার
+1️⃣2️⃣ <b>Macro & News Safety:</b> CPI, NFP, FOMC নিউজ ঝুঁকি সুরক্ষা
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-💡 <b>সোনালী দর্শন:</b>
-<i>Trend ➔ Liquidity ➔ Setup ➔ Confirmation ➔ Risk Check ➔ Entry।
-শর্ত না মিললে <b>NO TRADE</b> থাকাই সেরা ট্রেডারের লক্ষণ।</i>"""
+⚡ <b>ডুয়াল ইঞ্জিন সুবিধা:</b>
+• 🎯 <b>মাস্টার সুইং:</b> ১H/৪H ট্রেন্ড ভিত্তিক বড় ইন্ট্রাডে মুভ (R:R ১:২.০ - ১:৪.০)
+• ⚡ <b>কুইক স্ক্যাল্প:</b> লিকুইডিটি সুইপ ও ৫M ডিসপ্লেসমেন্টে দ্রুত এন্ট্রি (R:R ১:১.২ - ১:২.৫)
+• 🕒 <b>সার্বক্ষণিক (24/5):</b> কোনো সেশন লক নেই — সেটআপ প্রস্তুত হলেই তাৎক্ষণিক টেলিগ্রাম অ্যালার্ট!"""
         self.bot.send_message(msg, chat_id=chat_id)
 
     def _cmd_calendar(self, chat_id: str):
@@ -412,7 +418,7 @@ class CommandHandler:
                 if entry and sl:
                     sl_dist = max(1.0, abs(entry - sl))
 
-            risk_pct = 2.0  # 2% default risk
+            risk_pct = 0.5  # 0.5% — সিগনালের সাথে সামঞ্জস্যপূর্ণ (Bug fix: was incorrectly 2%)
             risk_usd = balance * (risk_pct / 100.0)
             # 1 Standard Lot = 100 oz of Gold. Each $1 move = $100 per 1.00 lot
             raw_lot = risk_usd / (sl_dist * 100)

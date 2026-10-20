@@ -8,7 +8,13 @@
 import logging
 from typing import Optional
 
-import google.generativeai as genai
+try:
+    from google import genai
+    from google.genai import types as genai_types
+    _NEW_SDK = True
+except ImportError:
+    import google.generativeai as genai  # type: ignore
+    _NEW_SDK = False
 
 logger = logging.getLogger(__name__)
 
@@ -26,33 +32,56 @@ You strictly require:
 5. Strict caution around high-impact US economic news (CPI, NFP, FOMC).
 Always output structured trading signals or explicitly state NO_TRADE / WAIT when conditions are not fully met."""
 
+    # নতুন google.genai SDK-তে সক্রিয় ও আপডেটেড মডেল তালিকা
     MODELS = [
-        "gemini-3.1-flash-lite",
         "gemini-3.5-flash-lite",
-        "gemini-flash-lite-latest",
         "gemini-3.8-flash",
+        "gemini-3.5-flash",
+        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
     ]
 
     def __init__(self, api_key: str):
+        self._api_key = api_key
         if api_key:
-            genai.configure(api_key=api_key)
+            if _NEW_SDK:
+                self._client = genai.Client(api_key=api_key)
+            else:
+                genai.configure(api_key=api_key)  # type: ignore
+                self._client = None
             self.available = True
-            logger.info("Gemini AI initialized with multi-model fallback")
+            logger.info(f"Gemini AI initialized (SDK: {'google.genai (new)' if _NEW_SDK else 'google.generativeai (legacy)'})")
         else:
             self.available = False
+            self._client = None
             logger.warning("No Gemini API key — AI analysis disabled")
 
     def _generate(self, prompt: str, system_prompt: str = None) -> Optional[str]:
-        """একাধিক মডেল ট্রাই করে যাতে কোটা শেষ না হয়"""
+        """একাধিক মডেল ট্রাই করে যাতে কোটা শেষ না হয়"""
         if not self.available:
             return None
         sys_inst = system_prompt or self.SYSTEM_PROMPT
+
         for model_name in self.MODELS:
             try:
-                m = genai.GenerativeModel(model_name, system_instruction=sys_inst)
-                res = m.generate_content(prompt)
-                if res and res.text:
-                    return res.text.strip()
+                if _NEW_SDK and self._client:
+                    # নতুন google.genai SDK
+                    response = self._client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=genai_types.GenerateContentConfig(
+                            system_instruction=sys_inst,
+                            temperature=0.3,
+                        ),
+                    )
+                    if response and response.text:
+                        return response.text.strip()
+                else:
+                    # পুরোনো google.generativeai ফলব্যাক
+                    m = genai.GenerativeModel(model_name, system_instruction=sys_inst)  # type: ignore
+                    res = m.generate_content(prompt)
+                    if res and res.text:
+                        return res.text.strip()
             except Exception as e:
                 logger.warning(f"Model {model_name} quota/error: {e}")
         return None
@@ -102,7 +131,7 @@ Always output structured trading signals or explicitly state NO_TRADE / WAIT whe
             checklist = tech.get("checklist", [])
 
             checklist_str = "\n".join([
-                f"  [{'PASS' if c['passed'] else 'FAIL'}] {c['num']}. {c['task']}"
+                f"  [{'PASS' if c['passed'] else 'FAIL'}] {c['num']}. {c.get('name', c.get('task', ''))}"
                 for c in checklist
             ])
 
@@ -258,6 +287,7 @@ WARNINGS:
         }
 
         lines = text.strip().split("\n")
+        current_section = None  # Bug fix: initialize before loop to prevent NameError
 
         for line in lines:
             line = line.strip()
@@ -422,30 +452,30 @@ Title: "{news_title}"
 Summary: "{news_summary}"
 Current Gold Price: ${current_price}
 
-Your task: Determine if this is a GENUINE MAJOR BREAKING EVENT that will cause SUBSTANTIAL market volatility (at least $15 - $30+ sudden move in Gold price), such as:
-1. Significant geopolitical escalation (direct war strikes, missile attacks, major conflict escalation involving major powers like Middle East, Russia/Ukraine, US/China, nuclear tensions).
-2. Major central bank policy surprises or emergency statements (Fed rate decision, emergency rate cut/hike, surprise Powell announcement).
-3. Major economic shocks (surprise CPI/NFP release deviating heavily from estimates, sovereign debt crisis, banking collapse).
+Your task: Determine if this is a GENUINE MARKET-MOVING EVENT or catalyst that will tangibly impact Gold (XAUUSD) prices (either bullish or bearish), such as:
+1. Significant geopolitical escalation or military actions (war, strikes, missile attacks, major escalations involving Middle East, Russia/Ukraine, US, China, etc.).
+2. Central bank & interest rate decisions/statements (Fed rate cuts/hikes, FOMC decisions, Jerome Powell speeches/statements).
+3. Major economic data releases & macro indicators (US CPI/inflation, NFP jobs report, GDP, unemployment rate, PCE).
+4. Major currency, tariff, trade war, banking or debt events (sharp US dollar movements, banking crisis, debt default, emergency sanctions).
 
-STRICT EXCLUSIONS - MUST BE REJECTED:
-- Routine daily market commentary or price recaps ("Gold rises as dollar softens", "Gold holds steady")
-- Analyst forecasts, technical analysis, price targets ("Gold Price Forecast: XAUUSD looks to plunge...", "Gold price targets $4200")
-- Routine opinions, newsletters, opinion pieces, or daily summaries
-- Local city gold rates or jewelry store prices
-- Routine geopolitical commentary without new breaking attacks/events
+STRICT EXCLUSIONS - MUST BE REJECTED (RESPOND SKIP):
+- Routine daily market recaps or price tick updates ("Gold rises as dollar softens", "Gold holds steady", "Gold drops 0.2%")
+- Routine analyst forecasts, predictions, technical chart analyses ("Gold Price Forecast: ...", "Gold looks to plunge/surge towards...")
+- Routine opinion pieces, newsletters, or daily blogs
+- Local city gold rates, bullion dealer promotions, or jewelry store prices
 
 INSTRUCTIONS:
-If this news is ROUTINE, MINOR, AN OPINION, OR A FORECAST:
+If this news is ROUTINE, MINOR, AN OPINION, LOCAL JEWELRY, OR A GENERIC FORECAST:
 Respond strictly with single word:
 SKIP
 
-If this news is truly a MAJOR BREAKING MARKET-MOVING EVENT:
-Start with "APPROVED:" and provide a professional, concise impact assessment strictly in natural BENGALI (বাংলা ভাষায়):
-• <b>সংক্ষিপ্ত খবর:</b> [বাংলায় ১ লাইনে কি ঘটেছে]
-• <b>মার্কেট অভিমুখ:</b> [বুলিশ (দাম বাড়ার তীব্র সম্ভাবনা 🟢) / বেয়ারিশ (দাম কমার তীব্র সম্ভাবনা 🔴) / চরম অস্থিরতা ⚠️]
-• <b>প্রত্যাশিত মুভমেন্ট:</b> [আনুমানিক কত ডলার ওঠানামা হতে পারে, যেমন $১৫-$৩০]
-• <b>কেন বড় প্রভাব পড়বে:</b> [১-২ লাইনে মূল অর্থনৈতিক/ভূরাজনৈতিক কারণ]
-• <b>ট্রেডারদের করণীয়:</b> [১ লাইনে তাৎক্ষণিক পরামর্শ]
+If this news has a REAL IMPACT on the Gold market (will cause price to rise or fall):
+Start with "APPROVED:" and provide a professional, concise assessment strictly in natural BENGALI (বাংলা ভাষায়):
+• 📌 <b>সংক্ষিপ্ত খবর:</b> [বাংলায় ১ লাইনে কি ঘটেছে]
+• 📈 <b>মার্কেট অভিমুখ:</b> [বুলিশ (দাম বাড়ার সম্ভাবনা 🟢) / বেয়ারিশ (দাম কমার সম্ভাবনা 🔴) / তীব্র ওঠানামা ⚠️]
+• 🔍 <b>কেন দাম কমতে বা বাড়তে পারে:</b> [১-২ লাইনে সুস্পষ্ট কারণ — যেমন নিরাপদ আশ্রয়ের চাহিদা বৃদ্ধি, ডলার দুর্বল হওয়া, বা ফেডের সুদের হারের প্রভাব ইত্যাদির কারণে গোল্ডের দাম কেন বাড়ছে বা কমছে তা স্পষ্ট করে বলুন]
+• 📊 <b>প্রত্যাশিত মুভমেন্ট:</b> [আনুমানিক কত ডলার বা পিপস ওঠানামা হতে পারে, যেমন $১০-$২৫+]
+• 💡 <b>ট্রেডারদের করণীয়:</b> [১ লাইনে তাৎক্ষণিক ট্রেডিং পরামর্শ ও সতর্কতা]
 """
         try:
             ai_text = self._generate(prompt)

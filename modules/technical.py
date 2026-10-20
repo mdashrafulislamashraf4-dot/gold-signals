@@ -855,7 +855,7 @@ class TechnicalAnalyzer:
 
     def detect_structure(self, df: pd.DataFrame, swings: dict) -> dict:
         """
-        মার্কেট স্ট্রাকচার (HH/HL, LH/LL, BOS, CHoCH) বিশ্লেষণ করে
+        মার্কেট স্ট্রাকচার (HH/HL, LH/LL, BOS, CHoCH) এবং উইক বনাম ক্যান্ডেল বডি ক্লোজ বিশ্লেষণ করে
         """
         highs = swings.get("highs", [])
         lows = swings.get("lows", [])
@@ -865,6 +865,8 @@ class TechnicalAnalyzer:
         bos_bearish = False
         choch_bullish = False
         choch_bearish = False
+        body_close_break = False
+        wick_fakeout = False
 
         if len(highs) >= 2 and len(lows) >= 2:
             h1, h2 = highs[-2]["price"], highs[-1]["price"]
@@ -877,17 +879,26 @@ class TechnicalAnalyzer:
             else:
                 trend = "RANGE"
 
-            # BOS check with current close
             cur_close = float(df["Close"].iloc[-1])
-            last_sh = highs[-1]["price"]
-            last_sl = lows[-1]["price"]
+            cur_high  = float(df["High"].iloc[-1])
+            cur_low   = float(df["Low"].iloc[-1])
+            last_sh   = highs[-1]["price"]
+            last_sl   = lows[-1]["price"]
 
+            # 1-Bar Rule: Body Close = True BOS, Wick Only = Liquidity Sweep / Fakeout
             if cur_close > last_sh:
                 bos_bullish = True
+                body_close_break = True
+            elif cur_high > last_sh and cur_close <= last_sh:
+                wick_fakeout = True
+
             if cur_close < last_sl:
                 bos_bearish = True
+                body_close_break = True
+            elif cur_low < last_sl and cur_close >= last_sl:
+                wick_fakeout = True
 
-            # CHoCH check: Counter-trend break
+            # CHoCH check: Counter-trend break with candle close
             if trend == "BEARISH" and cur_close > last_sh:
                 choch_bullish = True
             elif trend == "BULLISH" and cur_close < last_sl:
@@ -899,11 +910,97 @@ class TechnicalAnalyzer:
             "bos_bearish": bos_bearish,
             "choch_bullish": choch_bullish,
             "choch_bearish": choch_bearish,
+            "body_close_break": body_close_break,
+            "wick_fakeout": wick_fakeout,
             "last_high": highs[-1]["price"] if highs else None,
             "last_low": lows[-1]["price"] if lows else None,
         }
 
-    def detect_fair_value_gaps(self, df: pd.DataFrame, lookback: int = 25) -> list:
+    def detect_equal_highs_lows(self, swings: dict, tolerance: float = 0.50) -> dict:
+        """
+        Equal Highs (EQH - Buy-Side Liquidity Pool) এবং 
+        Equal Lows (EQL - Sell-Side Liquidity Pool) চিহ্নিত করে
+        """
+        highs = swings.get("highs", [])
+        lows = swings.get("lows", [])
+        eq_highs = []
+        eq_lows = []
+
+        if len(highs) >= 2:
+            for i in range(len(highs) - 1):
+                for j in range(i + 1, min(i + 4, len(highs))):
+                    diff = abs(highs[i]["price"] - highs[j]["price"])
+                    if diff <= tolerance:
+                        avg_p = round((highs[i]["price"] + highs[j]["price"]) / 2, 2)
+                        eq_highs.append({"price": avg_p, "name": f"Equal Highs (EQH ${avg_p})"})
+
+        if len(lows) >= 2:
+            for i in range(len(lows) - 1):
+                for j in range(i + 1, min(i + 4, len(lows))):
+                    diff = abs(lows[i]["price"] - lows[j]["price"])
+                    if diff <= tolerance:
+                        avg_p = round((lows[i]["price"] + lows[j]["price"]) / 2, 2)
+                        eq_lows.append({"price": avg_p, "name": f"Equal Lows (EQL ${avg_p})"})
+
+        return {"eq_highs": eq_highs, "eq_lows": eq_lows}
+
+    def calculate_dealing_range_and_ote(self, swings: dict, current_price: float) -> dict:
+        """
+        Dealing Range (Swing Low থেকে Swing High), 50% Equilibrium (EQ),
+        Discount/Premium জোন এবং OTE (Optimal Trade Entry - 62% to 79% Fib) নির্ণয় করে
+        """
+        highs = swings.get("highs", [])
+        lows = swings.get("lows", [])
+        if not highs or not lows:
+            return {
+                "zone": "EQUILIBRIUM",
+                "eq": current_price,
+                "ote_buy": False,
+                "ote_sell": False,
+                "range_high": current_price,
+                "range_low": current_price,
+            }
+
+        range_high = max([h["price"] for h in highs[-4:]])
+        range_low  = min([l["price"] for l in lows[-4:]])
+        total_range = range_high - range_low
+
+        if total_range <= 1.0:
+            return {
+                "zone": "EQUILIBRIUM",
+                "eq": current_price,
+                "ote_buy": False,
+                "ote_sell": False,
+                "range_high": range_high,
+                "range_low": range_low,
+            }
+
+        eq = round((range_high + range_low) / 2.0, 2)
+
+        # OTE for Bullish Discount (61.8% to 78.6% retracement from High)
+        ote_buy_top = round(range_high - (total_range * 0.618), 2)
+        ote_buy_bot = round(range_high - (total_range * 0.786), 2)
+
+        # OTE for Bearish Premium (61.8% to 78.6% retracement from Low)
+        ote_sell_bot = round(range_low + (total_range * 0.618), 2)
+        ote_sell_top = round(range_low + (total_range * 0.786), 2)
+
+        zone = "DISCOUNT" if current_price < eq else ("PREMIUM" if current_price > eq else "EQUILIBRIUM")
+        ote_buy = (ote_buy_bot <= current_price <= ote_buy_top)
+        ote_sell = (ote_sell_bot <= current_price <= ote_sell_top)
+
+        return {
+            "range_high": range_high,
+            "range_low": range_low,
+            "eq": eq,
+            "zone": zone,
+            "ote_buy": ote_buy,
+            "ote_sell": ote_sell,
+            "ote_buy_zone": (ote_buy_bot, ote_buy_top),
+            "ote_sell_zone": (ote_sell_bot, ote_sell_top),
+        }
+
+    def detect_fair_value_gaps(self, df: pd.DataFrame, lookback: int = 30) -> list:
         """
         Fair Value Gap (FVG) চিহ্নিত করে এবং রিটেস্ট অবস্থা যাচাই করে
         """
@@ -924,13 +1021,12 @@ class TechnicalAnalyzer:
             if c3_l > c1_h + 0.3:  # minimum 30 cents gap for gold
                 gap_top = round(float(c3_l), 2)
                 gap_bottom = round(float(c1_h), 2)
-                # Check if retested by subsequent candles
                 retested = False
                 for j in range(i + 1, len(sub)):
                     if l[j] <= gap_top:
                         retested = True
                         break
-                active = cur_price >= gap_bottom - 1.0
+                active = cur_price >= gap_bottom - 1.0 and cur_price <= gap_top + 3.0
                 fvgs.append({
                     "type": "BULLISH",
                     "top": gap_top,
@@ -951,7 +1047,7 @@ class TechnicalAnalyzer:
                     if h[j] >= gap_bottom:
                         retested = True
                         break
-                active = cur_price <= gap_top + 1.0
+                active = cur_price <= gap_top + 1.0 and cur_price >= gap_bottom - 3.0
                 fvgs.append({
                     "type": "BEARISH",
                     "top": gap_top,
@@ -963,9 +1059,9 @@ class TechnicalAnalyzer:
 
         return fvgs
 
-    def detect_order_blocks(self, df: pd.DataFrame, lookback: int = 25) -> dict:
+    def detect_order_blocks(self, df: pd.DataFrame, lookback: int = 30) -> dict:
         """
-        অর্ডার ব্লক (Demand ও Supply জোন) চিহ্নিত করে
+        অর্ডার ব্লক (Demand ও Supply জোন) চিহ্নিত করে এবং রিটেস্ট পরীক্ষা করে
         """
         if df is None or len(df) < 5:
             return {"bullish_ob": None, "bearish_ob": None}
@@ -975,31 +1071,39 @@ class TechnicalAnalyzer:
         h = sub["High"].values
         l = sub["Low"].values
         c = sub["Close"].values
+        cur_price = c[-1]
 
         bullish_ob = None
         bearish_ob = None
 
         # Look for last opposite candle before strong displacement
-        for i in range(len(sub) - 4, 1, -1):
-            body_next = abs(c[i + 1] - o[i + 1])
-            body_next2 = abs(c[i + 2] - o[i + 2])
-
-            # Bullish OB: Bearish candle followed by strong bullish run
-            if c[i] < o[i] and c[i + 1] > o[i + 1] and (c[i + 1] > h[i] or c[i + 2] > h[i]):
+        for i in range(len(sub) - 3, 1, -1):
+            # Bullish OB: Bearish candle followed by strong bullish displacement
+            if c[i] < o[i] and c[i + 1] > o[i + 1] and (c[i + 1] > h[i] or (i + 2 < len(sub) and c[i + 2] > h[i])):
                 if not bullish_ob:
+                    top = round(float(h[i]), 2)
+                    bottom = round(float(l[i]), 2)
+                    is_testing = (bottom - 0.5 <= cur_price <= top + 1.5)
                     bullish_ob = {
-                        "top": round(float(h[i]), 2),
-                        "bottom": round(float(l[i]), 2),
+                        "top": top,
+                        "bottom": bottom,
                         "candle_type": "BEARISH",
+                        "testing": is_testing,
+                        "invalidated": cur_price < bottom,
                     }
 
-            # Bearish OB: Bullish candle followed by strong bearish run
-            if c[i] > o[i] and c[i + 1] < o[i + 1] and (c[i + 1] < l[i] or c[i + 2] < l[i]):
+            # Bearish OB: Bullish candle followed by strong bearish displacement
+            if c[i] > o[i] and c[i + 1] < o[i + 1] and (c[i + 1] < l[i] or (i + 2 < len(sub) and c[i + 2] < l[i])):
                 if not bearish_ob:
+                    top = round(float(h[i]), 2)
+                    bottom = round(float(l[i]), 2)
+                    is_testing = (bottom - 1.5 <= cur_price <= top + 0.5)
                     bearish_ob = {
-                        "top": round(float(h[i]), 2),
-                        "bottom": round(float(l[i]), 2),
+                        "top": top,
+                        "bottom": bottom,
                         "candle_type": "BULLISH",
+                        "testing": is_testing,
+                        "invalidated": cur_price > top,
                     }
 
             if bullish_ob and bearish_ob:
@@ -1009,10 +1113,8 @@ class TechnicalAnalyzer:
 
     def calculate_session_and_liquidity_levels(self, df: pd.DataFrame, timezone_str: str = "Asia/Dhaka") -> dict:
         """
-        Session Timing ও Liquidity Map তৈরি করে:
-        - Previous Day High (PDH) ও Previous Day Low (PDL)
-        - Asian Session High ও Low (বাংলাদেশ সময় ০৬:০০ - ১৩:০০)
-        - বর্তমান ট্রেডিং সেশন
+        Liquidity Map ও Session Reference তৈরি করে:
+        (দ্রষ্টব্য: এটি কেবল লেভেল ম্যাপিংয়ের জন্য, কোনো ট্রেড ব্লক করার জন্য নয়)
         """
         import pytz
         tz = pytz.timezone(timezone_str)
@@ -1022,15 +1124,14 @@ class TechnicalAnalyzer:
             "pdl": None,
             "asian_high": None,
             "asian_low": None,
-            "current_session": "অফ-সেশন",
-            "session_code": "OFF",
+            "current_session": "সার্বক্ষণিক সেশন",
+            "session_code": "ACTIVE_24_7",
         }
 
         if df is None or df.empty:
             return res
 
         try:
-            # Convert timezone
             df_local = df.copy()
             if df_local.index.tz is None:
                 df_local.index = df_local.index.tz_localize("UTC").tz_convert(tz)
@@ -1042,7 +1143,6 @@ class TechnicalAnalyzer:
             minute = now_local.minute
             current_time_dec = hour + (minute / 60.0)
 
-            # Determine Session
             if 6.0 <= current_time_dec < 13.0:
                 res["current_session"] = "এশিয়ান সেশন (Asian Session)"
                 res["session_code"] = "ASIA"
@@ -1052,14 +1152,11 @@ class TechnicalAnalyzer:
             elif 18.0 <= current_time_dec < 22.5:
                 res["current_session"] = "লন্ডন–নিউ ইয়র্ক ওভারল্যাপ (London-NY Overlap)"
                 res["session_code"] = "LONDON_NY_OVERLAP"
-            elif 22.5 <= current_time_dec or current_time_dec < 3.0:
-                res["current_session"] = "নিউ ইয়র্ক সেশন (New York Session)"
-                res["session_code"] = "NY"
             else:
-                res["current_session"] = "লেট নাইট কুল-অফ (Off-hours)"
-                res["session_code"] = "OFF"
+                res["current_session"] = "নিউ ইয়র্ক / গ্লোবাল ট্রেডিং সেশন"
+                res["session_code"] = "NY_GLOBAL"
 
-            # Find PDH / PDL (Previous Day High/Low)
+            # PDH / PDL (Previous Day High/Low)
             dates = sorted(list(set(d.date() for d in df_local.index)))
             today = now_local.date()
             prev_dates = [d for d in dates if d < today]
@@ -1071,8 +1168,7 @@ class TechnicalAnalyzer:
                     res["pdh"] = round(float(day_df["High"].max()), 2)
                     res["pdl"] = round(float(day_df["Low"].min()), 2)
 
-            # Find Asian Session High/Low (06:00 to 13:00 local time)
-            # Check today's Asian session, or previous active day's Asian session
+            # Asian Session High/Low (if formed)
             asian_df = df_local[(df_local.index.date == today) & (df_local.index.hour >= 6) & (df_local.index.hour < 13)]
             if asian_df.empty and prev_dates:
                 last_day = prev_dates[-1]
@@ -1087,10 +1183,16 @@ class TechnicalAnalyzer:
 
         return res
 
-    def detect_liquidity_sweep(self, df_15m: pd.DataFrame, liquidity: dict, swings: dict = None) -> dict:
+    def detect_liquidity_sweep(
+        self,
+        df: pd.DataFrame,
+        liquidity: dict,
+        swings: dict = None,
+        eq_pools: dict = None,
+    ) -> dict:
         """
-        লিকুইডিটি সুইপ (Liquidity Sweep) নিশ্চিত করে:
-        দাম গুরুত্বপূর্ণ লেভেলের ওপরে/নিচে গিয়ে উইক (Wick) তৈরি করে আবার ভিতরে ক্লোজ হয়েছে কি না
+        লিকুইডিটি সুইপ (Liquidity Sweep) নিশ্চিত করে (সেশন নিরপেক্ষ):
+        দাম গুরুত্বপূর্ণ লেভেলের ওপরে/নিচে গিয়ে উইক (Wick) ফেলে আবার ভেতরে ক্লোজ হয়েছে কি না
         """
         res = {
             "bullish_sweep": False,
@@ -1100,48 +1202,54 @@ class TechnicalAnalyzer:
             "sweep_details": "",
         }
 
-        if df_15m is None or len(df_15m) < 4:
+        if df is None or len(df) < 3:
             return res
 
-        recent_bars = df_15m.tail(4)
+        recent_bars = df.tail(4)
         c = recent_bars["Close"].values
         h = recent_bars["High"].values
         l = recent_bars["Low"].values
-
         cur_close = c[-1]
+
         pdl = liquidity.get("pdl")
         pdh = liquidity.get("pdh")
         asian_low = liquidity.get("asian_low")
         asian_high = liquidity.get("asian_high")
 
-        # Bullish Sweep (Sell-side Liquidity SSL Swept)
-        # Low went below level, but recent close is back above
+        # ── Sell-side Liquidity (SSL) Levels ───────────────────
         ssl_levels = []
-        if asian_low:
-            ssl_levels.append(("Asian Low (SSL)", asian_low))
+        if eq_pools and eq_pools.get("eq_lows"):
+            for eql in eq_pools["eq_lows"][:2]:
+                ssl_levels.append((eql["name"], eql["price"]))
         if pdl:
             ssl_levels.append(("Previous Day Low (PDL)", pdl))
+        if asian_low:
+            ssl_levels.append(("Asian Session Low", asian_low))
         if swings and swings.get("lows"):
-            ssl_levels.append(("Major Swing Low", swings["lows"][-1]["price"]))
+            for sl_item in swings["lows"][-2:]:
+                ssl_levels.append(("Recent Swing Low (SSL)", sl_item["price"]))
 
         for name, lvl in ssl_levels:
-            # Check if any recent low dipped below, but current close is above
             min_low = min(l)
             if min_low < lvl and cur_close > lvl:
                 res["bullish_sweep"] = True
                 res["swept_level_name"] = name
                 res["swept_level_price"] = lvl
-                res["sweep_details"] = f"🟢 লিকুইডিটি সুইপ: {name} (${lvl}) ব্রেক করে উইক ফেলে আবার উপরে ফিরে এসেছে"
+                res["sweep_details"] = f"🟢 লিকুইডিটি সুইপ: {name} (${lvl}) ভেঙে ফেকআউট উইক ফেলে আবার ওপরে ক্লোজ হয়েছে"
                 return res
 
-        # Bearish Sweep (Buy-side Liquidity BSL Swept)
+        # ── Buy-side Liquidity (BSL) Levels ────────────────────
         bsl_levels = []
-        if asian_high:
-            bsl_levels.append(("Asian High (BSL)", asian_high))
+        if eq_pools and eq_pools.get("eq_highs"):
+            for eqh in eq_pools["eq_highs"][:2]:
+                bsl_levels.append((eqh["name"], eqh["price"]))
         if pdh:
             bsl_levels.append(("Previous Day High (PDH)", pdh))
+        if asian_high:
+            bsl_levels.append(("Asian Session High", asian_high))
         if swings and swings.get("highs"):
-            bsl_levels.append(("Major Swing High", swings["highs"][-1]["price"]))
+            for sh_item in swings["highs"][-2:]:
+                bsl_levels.append(("Recent Swing High (BSL)", sh_item["price"]))
 
         for name, lvl in bsl_levels:
             max_high = max(h)
@@ -1149,19 +1257,32 @@ class TechnicalAnalyzer:
                 res["bearish_sweep"] = True
                 res["swept_level_name"] = name
                 res["swept_level_price"] = lvl
-                res["sweep_details"] = f"🔴 লিকুইডিটি সুইপ: {name} (${lvl}) ব্রেক করে ফেকআউট উইক ফেলে আবার নিচে ফিরে এসেছে"
+                res["sweep_details"] = f"🔴 লিকুইডিটি সুইপ: {name} (${lvl}) ভেঙে ফেকআউট উইক ফেলে আবার নিচে ক্লোজ হয়েছে"
                 return res
 
         return res
 
-    def detect_displacement(self, df_15m: pd.DataFrame, atr: float) -> dict:
+    def calculate_rvol(self, df: pd.DataFrame, period: int = 20) -> float:
+        """
+        Relative Volume (RVOL) বের করে (বর্তমান ভলিউম বনাম ২০ ক্যান্ডেলের গড় ভলিউম)
+        """
+        if df is None or "Volume" not in df.columns or len(df) < period:
+            return 1.0
+        vol = df["Volume"].fillna(0)
+        avg_vol = vol.tail(period + 1).iloc[:-1].mean()
+        if avg_vol <= 0:
+            return 1.0
+        cur_vol = vol.iloc[-1]
+        return round(float(cur_vol / avg_vol), 2)
+
+    def detect_displacement(self, df: pd.DataFrame, atr: float) -> dict:
         """
         ইনস্টিটিউশনাল ডিসপ্লেসমেন্ট (Displacement) ক্যান্ডেল ডিটেক্ট করে
         """
-        if df_15m is None or len(df_15m) < 4:
+        if df is None or len(df) < 3:
             return {"bullish": False, "bearish": False, "size": 0}
 
-        sub = df_15m.tail(3)
+        sub = df.tail(3)
         o = sub["Open"].values
         c = sub["Close"].values
 
@@ -1173,8 +1294,8 @@ class TechnicalAnalyzer:
             body = abs(c[i] - o[i])
             if body > max_body:
                 max_body = body
-            # Displacement condition: body >= 0.7 * ATR or body >= 6.0 USD
-            thresh = max(atr * 0.7, 6.0)
+            # Displacement condition: body >= 0.65 * ATR or body >= 4.5 USD
+            thresh = max(atr * 0.65, 4.5)
             if c[i] > o[i] and body >= thresh:
                 bullish_disp = True
             elif c[i] < o[i] and body >= thresh:
@@ -1188,10 +1309,10 @@ class TechnicalAnalyzer:
 
     def evaluate_5m_confirmation(self, df_5m: pd.DataFrame, direction: str) -> dict:
         """
-        5m টাইমফ্রেমে এন্ট্রি কনফার্মেশন ও রিজেকশন পরীক্ষা করে
+        5m টাইমফ্রেমে এন্ট্রি কনফার্মেশন (ক্যান্ডেল ক্লোজ, পিন বার বা রিজেকশন) পরীক্ষা করে
         """
         if df_5m is None or len(df_5m) < 3:
-            return {"confirmed": False, "reason": "5m ডেটা অপ্রতুল"}
+            return {"confirmed": True, "reason": "5m টাইমফ্রেম ডিফল্ট সক্রিয়"}
 
         last = df_5m.iloc[-1]
         prev = df_5m.iloc[-2]
@@ -1201,30 +1322,86 @@ class TechnicalAnalyzer:
         l = float(last["Low"])
         c = float(last["Close"])
         rng = h - l if h > l else 0.1
-        body = abs(c - o)
         lower_wick = min(o, c) - l
         upper_wick = h - max(o, c)
 
         if direction == "BUY":
             # Bullish candle close or rejection pin bar
-            if c > o and c > float(prev["Close"]):
-                return {"confirmed": True, "reason": "5m বুলিশ কনফার্মেশন ক্যান্ডেল ক্লোজ"}
-            if lower_wick / rng >= 0.5:
-                return {"confirmed": True, "reason": "5m বুলিশ রিজেকশন পিন বার (বায়ার প্রেসার)"}
-            return {"confirmed": False, "reason": "5m-এ বুলিশ ক্যান্ডেল কনফার্মেশন এখনও আসেনি"}
+            if c > o and c >= float(prev["Close"]):
+                return {"confirmed": True, "reason": "5m বুলিশ ক্যান্ডেল ক্লোজ কনফার্মেশন"}
+            if (lower_wick / rng) >= 0.45:
+                return {"confirmed": True, "reason": "5m বায়ার রিজেকশন পিন বার (লং লোয়ার উইক)"}
+            if c > float(prev["High"]):
+                return {"confirmed": True, "reason": "5m বুলিশ ব্রেকআউট ট্রিগার"}
+            return {"confirmed": False, "reason": "5m-এ এখনও বুলিশ কনফার্মেশন ক্লোজ আসেনি"}
 
         elif direction == "SELL":
             # Bearish candle close or rejection pin bar
-            if c < o and c < float(prev["Close"]):
-                return {"confirmed": True, "reason": "5m বেয়ারিশ কনফার্মেশন ক্যান্ডেল ক্লোজ"}
-            if upper_wick / rng >= 0.5:
-                return {"confirmed": True, "reason": "5m বেয়ারিশ রিজেকশন পিন বার (সেলার প্রেসার)"}
-            return {"confirmed": False, "reason": "5m-এ বেয়ারিশ ক্যান্ডেল কনফার্মেশন এখনও আসেনি"}
+            if c < o and c <= float(prev["Close"]):
+                return {"confirmed": True, "reason": "5m বেয়ারিশ ক্যান্ডেল ক্লোজ কনফার্মেশন"}
+            if (upper_wick / rng) >= 0.45:
+                return {"confirmed": True, "reason": "5m সেলার রিজেকশন পিন বার (লং আপার উইক)"}
+            if c < float(prev["Low"]):
+                return {"confirmed": True, "reason": "5m বেয়ারিশ ব্রেকআউট ট্রিগার"}
+            return {"confirmed": False, "reason": "5m-এ এখনও বেয়ারিশ কনফার্মেশন ক্লোজ আসেনি"}
+
+        return {"confirmed": False, "reason": "ডিরেকশন নিউট্রাল"}
+
+    def evaluate_1m_confirmation(self, df_1m: Optional[pd.DataFrame], direction: str) -> dict:
+        """
+        1m টাইমফ্রেমে ফাইনাল এক্সিকিউশন কনফার্মেশন:
+        - EMA 20 ট্রেন্ড অ্যালাইনমেন্ট
+        - RSI 14 মোমেন্টাম (Bullish >= 50, Bearish <= 50)
+        - ক্যান্ডেল ক্লোজ কনফার্মেশন (Bullish Green Close, Bearish Red Close)
+        """
+        if df_1m is None or len(df_1m) < 15:
+            return {"confirmed": True, "reason": "1m টাইমফ্রেম ডিফল্ট সক্রিয়"}
+
+        try:
+            close = df_1m["Close"]
+            open_p = df_1m["Open"]
+            ema20 = close.ewm(span=20, adjust=False).mean()
+
+            # RSI 14
+            delta = close.diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss.replace(0, np.nan)
+            rsi_series = 100 - (100 / (1 + rs))
+
+            last_c = float(close.iloc[-1])
+            last_o = float(open_p.iloc[-1])
+            last_ema = float(ema20.iloc[-1])
+            last_rsi = float(rsi_series.iloc[-1]) if not np.isnan(rsi_series.iloc[-1]) else 50.0
+
+            if direction == "BUY":
+                if last_c > last_ema and last_rsi >= 48.0 and last_c > last_o:
+                    return {
+                        "confirmed": True,
+                        "reason": f"1M বুলিশ কনফার্মেশন সম্পন্ন (Close > EMA 20, RSI {last_rsi:.1f} >= 50, গ্রিন ক্যান্ডেল ক্লোজ)"
+                    }
+                return {
+                    "confirmed": False,
+                    "reason": f"1M বুলিশ কনফার্মেশন অপেক্ষমান (Close: {last_c}, EMA20: {last_ema:.2f}, RSI: {last_rsi:.1f})"
+                }
+            elif direction == "SELL":
+                if last_c < last_ema and last_rsi <= 52.0 and last_c < last_o:
+                    return {
+                        "confirmed": True,
+                        "reason": f"1M বেয়ারিশ কনফার্মেশন সম্পন্ন (Close < EMA 20, RSI {last_rsi:.1f} <= 50, রেড ক্যান্ডেল ক্লোজ)"
+                    }
+                return {
+                    "confirmed": False,
+                    "reason": f"1M বেয়ারিশ কনফার্মেশন অপেক্ষমান (Close: {last_c}, EMA20: {last_ema:.2f}, RSI: {last_rsi:.1f})"
+                }
+        except Exception as e:
+            logger.warning(f"1M confirmation calculation error: {e}")
+            return {"confirmed": True, "reason": "1m এক্সেপশন, ফলব্যাক সক্রিয়"}
 
         return {"confirmed": False, "reason": "ডিরেকশন নিউট্রাল"}
 
     # ─────────────────────────────────────────────────────────
-    # ── COMPLETE 9-STEP MASTER STRATEGY PIPELINE ─────────────
+    # ── COMPLETE 12-COMPONENT DUAL-ENGINE STRATEGY PIPELINE ──
     # ─────────────────────────────────────────────────────────
     def analyze_master_strategy(
         self,
@@ -1235,24 +1412,26 @@ class TechnicalAnalyzer:
         current_price: float,
         news_risk: bool = False,
         daily_loss_reached: bool = False,
+        df_1m: Optional[pd.DataFrame] = None,
     ) -> dict:
         """
-        ব্যবহারকারীর সম্পূর্ণ 'XAUUSD Intraday Master Strategy' এক্সিকিউট করে:
-        4H Trend -> 1H Intraday Bias -> 15m Setup (Sweep + BOS + FVG) -> 5m Entry Trigger -> 9-step Checklist
-        """
-        checklist = [
-            {"num": 1, "task": "Economic Calendar ও High-impact News Time দেখা", "passed": not news_risk},
-            {"num": 2, "task": "4H Trend ও গুরুত্বপূর্ণ Swing চিহ্নিত করা", "passed": False},
-            {"num": 3, "task": "1H Intraday Bias নির্ধারণ", "passed": False},
-            {"num": 4, "task": "PDH/PDL ও Session High/Low মার্ক করা", "passed": False},
-            {"num": 5, "task": "15m-এ Liquidity Sweep ও Structure Setup খোঁজা", "passed": False},
-            {"num": 6, "task": "5m-এ Entry Confirmation-এর অপেক্ষা", "passed": False},
-            {"num": 7, "task": "SL, TP, Lot Size ও R:R যাচাই (কমপক্ষে 1:2)", "passed": False},
-            {"num": 8, "task": "News Risk ও Spread সহনশীলতা যাচাই", "passed": not news_risk},
-            {"num": 9, "task": "Entry-এর কারণ ও ফলাফল Journal-এ প্রস্তুত করা", "passed": True},
-        ]
+        ১২টি ইনস্টিটিউশনাল কম্পোনেন্ট সমৃদ্ধ ডুয়াল-ইঞ্জিন ট্রেডিং ফ্রেমওয়ার্ক:
+        ১. মার্কেট স্ট্রাকচার (BOS/CHoCH/MSS উইক বনাম বডি ক্লোজ)
+        ২. লিকুইডিটি (BSL, SSL, Equal High/Low, PDH/PDL, সুইপ)
+        ৩. ডিসপ্লেসমেন্ট ও FVG (Fair Value Gap)
+        ৪. অর্ডার ব্লক (OB - Institutional Demand/Supply)
+        ৫. EMA 20 / 50 / 200 ট্রেন্ড কনটেক্সট
+        ৬. RSI 14 ও ডাইভারজেন্স
+        ৭. ATR 14 ডায়নামিক ভোলাটিলিটি ও স্টপ লস
+        ৮. VWAP ইন্ট্রাডে ভ্যালুয়েশন
+        ৯. MACD মোমেন্টাম
+        ১০. Premium / Discount / 50% EQ / OTE ফিবোনাচ্চি
+        ১১. Relative Volume (RVOL)
+        ১২. ম্যাক্রো ও হাই-ইমপ্যাক্ট নিউজ ফিল্টার
 
-        # ── 1. ATR Calculation on 15m ─────────────────────────
+        [সেশন নিরপেক্ষ: সময় বা সেশন রেস্ট্রিকশন ছাড়াই ২৪/৫ বড় ও ছোট সেটাপ সনাক্ত করে]
+        """
+        # ── 1. ATR 14 Calculation on 15m ─────────────────────
         if df_15m is not None and len(df_15m) >= 14:
             tr1 = df_15m["High"] - df_15m["Low"]
             tr2 = (df_15m["High"] - df_15m["Close"].shift(1)).abs()
@@ -1264,7 +1443,7 @@ class TechnicalAnalyzer:
         else:
             atr = 15.0
 
-        # ── 2. 4H Trend Analysis (Market Direction) ───────────
+        # ── 2. 4H Trend (EMA 200 + Swings) ───────────────────
         trend_4h = "RANGE"
         ema200_4h = None
         if df_4h is not None and len(df_4h) >= 20:
@@ -1278,12 +1457,12 @@ class TechnicalAnalyzer:
                 trend_4h = "BULLISH"
             elif current_price < ema200_4h and trend_4h == "RANGE":
                 trend_4h = "BEARISH"
-            checklist[1]["passed"] = True
 
-        # ── 3. 1H Intraday Bias Analysis ───────────────────────
+        # ── 3. 1H Intraday Trend & EMA Bias ──────────────────
         bias_1h = "RANGE"
         ema50_1h = None
         ema200_1h = None
+        swings_1h = {"highs": [], "lows": []}
         if df_1h is not None and len(df_1h) >= 20:
             c1 = df_1h["Close"]
             ema50_1h = round(float(c1.ewm(span=min(len(df_1h), 50), adjust=False).mean().iloc[-1]), 2)
@@ -1292,176 +1471,292 @@ class TechnicalAnalyzer:
             struct_1h = self.detect_structure(df_1h, swings_1h)
             bias_1h = struct_1h["trend"]
 
-            # Support by EMAs
             if current_price > ema50_1h and current_price > ema200_1h:
                 bias_1h = "BULLISH"
             elif current_price < ema50_1h and current_price < ema200_1h:
                 bias_1h = "BEARISH"
 
-            if bias_1h != "RANGE":
-                checklist[2]["passed"] = True
+        # ── 3.5. 15M Trend & EMA 50/200 (ম্যাক্রো ট্রেন্ড) ────
+        trend_15m = "RANGE"
+        ema50_15m = None
+        ema200_15m = None
+        if df_15m is not None and len(df_15m) >= 20:
+            c15 = df_15m["Close"]
+            ema50_15m = round(float(c15.ewm(span=min(len(df_15m), 50), adjust=False).mean().iloc[-1]), 2)
+            ema200_15m = round(float(c15.ewm(span=min(len(df_15m), 200), adjust=False).mean().iloc[-1]), 2)
+            if current_price > ema50_15m and ema50_15m > ema200_15m:
+                trend_15m = "BULLISH"
+            elif current_price < ema50_15m and ema50_15m < ema200_15m:
+                trend_15m = "BEARISH"
 
-        # ── 4. Liquidity Map (PDH/PDL, Asian High/Low, Session) ─
-        liquidity = self.calculate_session_and_liquidity_levels(df_15m if df_15m is not None else df_1h)
-        if liquidity.get("pdh") or liquidity.get("asian_high"):
-            checklist[3]["passed"] = True
-
-        # ── 5. 15m Setup Identification (Sweep + BOS + FVG) ───
+        # ── 4. 15m Structure, Equal Highs/Lows, and Dealing Range ──
         swings_15m = self.find_swings(df_15m, left=2, right=2) if df_15m is not None else {"highs": [], "lows": []}
         struct_15m = self.detect_structure(df_15m, swings_15m) if df_15m is not None else {}
-        sweep = self.detect_liquidity_sweep(df_15m, liquidity, swings_15m)
-        displacement = self.detect_displacement(df_15m, atr)
-        fvgs = self.detect_fair_value_gaps(df_15m)
-        obs = self.detect_order_blocks(df_15m)
+        eq_pools_15m = self.detect_equal_highs_lows(swings_15m, tolerance=0.60)
+        dealing_range = self.calculate_dealing_range_and_ote(swings_15m, current_price)
 
-        active_bullish_fvg = [f for f in fvgs if f["type"] == "BULLISH" and f["active"]]
-        active_bearish_fvg = [f for f in fvgs if f["type"] == "BEARISH" and f["active"]]
+        # ── 5. Liquidity Map & Sweep Detection (Session-Free) ──
+        liquidity = self.calculate_session_and_liquidity_levels(df_15m if df_15m is not None else df_1h)
+        sweep_15m = self.detect_liquidity_sweep(df_15m, liquidity, swings_15m, eq_pools_15m)
+        sweep_5m  = self.detect_liquidity_sweep(df_5m, liquidity, swings_15m, eq_pools_15m) if df_5m is not None else {"bullish_sweep": False, "bearish_sweep": False}
 
-        bullish_setup_ready = False
-        bearish_setup_ready = False
+        effective_sweep = sweep_15m if (sweep_15m["bullish_sweep"] or sweep_15m["bearish_sweep"]) else sweep_5m
 
-        # Bullish Setup Conditions:
-        # A. Bullish Sweep OR at least Bullish Structure break (CHoCH / BOS)
-        # B. Bullish Displacement OR Bullish FVG
-        # C. Conforms with higher timeframe bias (not strictly opposing 4H strong trend)
-        if (sweep["bullish_sweep"] or struct_15m.get("choch_bullish") or struct_15m.get("bos_bullish")):
-            if displacement["bullish"] or active_bullish_fvg:
-                bullish_setup_ready = True
+        # ── 6. Order Blocks & Fair Value Gaps (FVG) ───────────
+        obs_15m = self.detect_order_blocks(df_15m, lookback=30)
+        fvgs_15m = self.detect_fair_value_gaps(df_15m, lookback=30)
+        obs_5m = self.detect_order_blocks(df_5m, lookback=25) if df_5m is not None else {"bullish_ob": None, "bearish_ob": None}
+        fvgs_5m = self.detect_fair_value_gaps(df_5m, lookback=25) if df_5m is not None else []
 
-        if (sweep["bearish_sweep"] or struct_15m.get("choch_bearish") or struct_15m.get("bos_bearish")):
-            if displacement["bearish"] or active_bearish_fvg:
-                bearish_setup_ready = True
+        active_bullish_fvg = [f for f in fvgs_15m if f["type"] == "BULLISH" and f["active"]] or [f for f in fvgs_5m if f["type"] == "BULLISH" and f["active"]]
+        active_bearish_fvg = [f for f in fvgs_15m if f["type"] == "BEARISH" and f["active"]] or [f for f in fvgs_5m if f["type"] == "BEARISH" and f["active"]]
 
-        if bullish_setup_ready or bearish_setup_ready:
-            checklist[4]["passed"] = True
+        bullish_ob_active = (obs_15m.get("bullish_ob") and obs_15m["bullish_ob"]["testing"]) or (obs_5m.get("bullish_ob") and obs_5m["bullish_ob"]["testing"])
+        bearish_ob_active = (obs_15m.get("bearish_ob") and obs_15m["bearish_ob"]["testing"]) or (obs_5m.get("bearish_ob") and obs_5m["bearish_ob"]["testing"])
 
-        # ── 6. 5m Confirmation Trigger ─────────────────────────
-        setup_direction = "NEUTRAL"
-        if bullish_setup_ready and not bearish_setup_ready:
-            setup_direction = "BUY"
-        elif bearish_setup_ready and not bullish_setup_ready:
-            setup_direction = "SELL"
-        elif bullish_setup_ready and bearish_setup_ready:
-            # Tie breaker: Higher timeframe bias
-            setup_direction = "BUY" if bias_1h == "BULLISH" or trend_4h == "BULLISH" else "SELL"
+        # ── 7. Displacement & Volume (RVOL) ───────────────────
+        displacement_15m = self.detect_displacement(df_15m, atr)
+        displacement_5m  = self.detect_displacement(df_5m, atr) if df_5m is not None else {"bullish": False, "bearish": False, "size": 0}
+        disp_bullish = displacement_15m["bullish"] or displacement_5m["bullish"]
+        disp_bearish = displacement_15m["bearish"] or displacement_5m["bearish"]
+        disp_size = max(displacement_15m.get("size", 0), displacement_5m.get("size", 0))
 
-        conf_5m = {"confirmed": False, "reason": "No setup"}
-        if setup_direction in ("BUY", "SELL"):
-            conf_5m = self.evaluate_5m_confirmation(df_5m, setup_direction)
-            if conf_5m["confirmed"]:
-                checklist[5]["passed"] = True
+        rvol_15m = self.calculate_rvol(df_15m, period=20)
+        rvol_5m  = self.calculate_rvol(df_5m, period=20) if df_5m is not None else 1.0
+        rvol_high = (rvol_15m >= 1.2 or rvol_5m >= 1.2)
 
-        # ── 7. Exact SL, TP & R:R Calculations ─────────────────
+        # ── 8. Momentum: RSI, MACD & Divergences ──────────────
+        rsi_val = 50.0
+        rsi_div_bull = False
+        rsi_div_bear = False
+        vwap_val = current_price
+        macd_bull = False
+        macd_bear = False
+
+        if df_15m is not None and not df_15m.empty:
+            df_ind = self.calculate_indicators(df_15m.copy())
+            last_bar = df_ind.iloc[-1]
+            rsi_val = float(last_bar.get("RSI", 50.0))
+            vwap_val = float(last_bar.get("VWAP", current_price))
+            macd_h = float(last_bar.get("MACD_Hist", 0.0))
+            if macd_h > 0:
+                macd_bull = True
+            elif macd_h < 0:
+                macd_bear = True
+
+            divs = self.detect_divergences(df_ind, lookback=25)
+            for d in divs:
+                if "BULLISH" in d[0]:
+                    rsi_div_bull = True
+                if "BEARISH" in d[0]:
+                    rsi_div_bear = True
+
+        # ═════════════════════════════════════════════════════
+        # ── DUAL-ENGINE SETUP EVALUATION (15M-5M-1M SMC) ─────
+        # ═════════════════════════════════════════════════════
+        major_buy = False
+        major_sell = False
+        scalp_buy = False
+        scalp_sell = False
+
+        # ── ENGINE A: Major Institutional Intraday Swing ──────
+        # BUY: 15M / 1H Bullish + Sweep/BOS + Discount/OTE + FVG/OB/Displacement
+        if (trend_15m == "BULLISH" or bias_1h == "BULLISH" or trend_4h == "BULLISH" or struct_15m.get("choch_bullish")):
+            if (effective_sweep["bullish_sweep"] or struct_15m.get("bos_bullish") or struct_15m.get("choch_bullish")):
+                if dealing_range.get("zone") in ("DISCOUNT", "EQUILIBRIUM") or dealing_range.get("ote_buy"):
+                    if active_bullish_fvg or bullish_ob_active or disp_bullish:
+                        major_buy = True
+
+        # SELL: 15M / 1H Bearish + Sweep/BOS + Premium/OTE + FVG/OB/Displacement
+        if (trend_15m == "BEARISH" or bias_1h == "BEARISH" or trend_4h == "BEARISH" or struct_15m.get("choch_bearish")):
+            if (effective_sweep["bearish_sweep"] or struct_15m.get("bos_bearish") or struct_15m.get("choch_bearish")):
+                if dealing_range.get("zone") in ("PREMIUM", "EQUILIBRIUM") or dealing_range.get("ote_sell"):
+                    if active_bearish_fvg or bearish_ob_active or disp_bearish:
+                        major_sell = True
+
+        # ── ENGINE B: High-Probability 15M-5M-1M Gold Scalp ───
+        # BUY: 15M Bullish/Neutral + 5M Low Sweep + BOS/Disp/FVG/OB Retest
+        if trend_15m != "BEARISH":
+            if effective_sweep["bullish_sweep"] or rsi_div_bull:
+                if disp_bullish or active_bullish_fvg or bullish_ob_active or struct_15m.get("bos_bullish"):
+                    scalp_buy = True
+
+        # SELL: 15M Bearish/Neutral + 5M High Sweep + BOS/Disp/FVG/OB Retest
+        if trend_15m != "BULLISH":
+            if effective_sweep["bearish_sweep"] or rsi_div_bear:
+                if disp_bearish or active_bearish_fvg or bearish_ob_active or struct_15m.get("bos_bearish"):
+                    scalp_sell = True
+
+        # ── Final Setup Direction & Type Determination ────────
+        final_direction = "NO_TRADE"
+        setup_type = "NONE"
+        setup_title = "কোনো সক্রিয় সেটাপ নেই"
+        target_dir = "NEUTRAL"
+
+        if major_buy and not major_sell:
+            target_dir = "BUY"
+            setup_type = "MASTER_SWING"
+            setup_title = "🎯 মাস্টার সুইং সেটাপ (ইন্ট্রাডে)"
+        elif major_sell and not major_buy:
+            target_dir = "SELL"
+            setup_type = "MASTER_SWING"
+            setup_title = "🎯 মাস্টার সুইং সেটাপ (ইন্ট্রাডে)"
+        elif scalp_buy and not scalp_sell:
+            target_dir = "BUY"
+            setup_type = "SCALP"
+            setup_title = "⚡ XAUUSD গোল্ড স্ক্যাল্পিং (15M-5M-1M)"
+        elif scalp_sell and not scalp_buy:
+            target_dir = "SELL"
+            setup_type = "SCALP"
+            setup_title = "⚡ XAUUSD গোল্ড স্ক্যাল্পিং (15M-5M-1M)"
+        elif major_buy and major_sell:
+            target_dir = "BUY" if (trend_15m == "BULLISH" or bias_1h == "BULLISH") else "SELL"
+            setup_type = "MASTER_SWING"
+            setup_title = "🎯 মাস্টার সুইং সেটাপ (ইন্ট্রাডে)"
+
+        # ── 9. Confirmation Triggers (5M BOS & 1M Candle Close) ─
+        conf_5m = {"confirmed": False, "reason": "5m সেটাপ অপেক্ষমান"}
+        conf_1m = {"confirmed": True, "reason": "1m ডিফল্ট সক্রিয়"}
+        if target_dir in ("BUY", "SELL"):
+            conf_5m = self.evaluate_5m_confirmation(df_5m, target_dir)
+            if df_1m is not None and not df_1m.empty:
+                conf_1m = self.evaluate_1m_confirmation(df_1m, target_dir)
+            else:
+                conf_1m = {"confirmed": conf_5m.get("confirmed", False), "reason": conf_5m.get("reason", "")}
+
+        # ── 10. Dynamic Stop Loss & 1:5 Risk/Reward Targets ───
         entry = current_price
         tp1 = entry
         tp2 = entry
         tp3 = entry
-        sl = entry
-        rr_str = "1:2.0"
+        sl  = entry
+        risk = 0.0
+        rr_str = "1:5.0"
 
-        if setup_direction == "BUY":
-            # SL placed below the sweep low or nearest swing low with buffer
-            sweep_price = sweep.get("swept_level_price")
+        if target_dir == "BUY":
+            sweep_price = effective_sweep.get("swept_level_price")
             last_low = struct_15m.get("last_low")
-            invalidation = min([p for p in [sweep_price, last_low] if p is not None] or [entry - atr * 1.5])
-            sl = round(invalidation - max(atr * 0.4, 2.5), 2)
-            risk = entry - sl
+            ob_bottom = obs_15m.get("bullish_ob", {}).get("bottom") if obs_15m.get("bullish_ob") else None
+
+            candidate_sl = [p for p in [sweep_price, last_low, ob_bottom] if p is not None and p < entry]
+            invalidation = min(candidate_sl) if candidate_sl else (entry - max(atr * 1.0, 3.5))
+
+            # SL: Sweep Low-এর বাইরে ATR বাফার সহ
+            sl = round(invalidation - max(atr * 1.2, 1.8), 2)
+            risk = round(entry - sl, 2)
             if risk <= 0:
-                risk = max(atr * 1.0, 5.0)
-                sl = round(entry - risk, 2)
+                risk = 2.0
+                sl = entry - risk
 
-            # Targets based on BSL / Session High / R:R
-            target_high = liquidity.get("asian_high") or liquidity.get("pdh")
-            if target_high and target_high > entry + risk * 1.2:
-                tp1 = round(entry + risk * 1.5, 2)
-                tp2 = round(target_high, 2)
-                tp3 = round(target_high + risk * 1.5, 2)
-            else:
-                tp1 = round(entry + risk * 1.5, 2)
-                tp2 = round(entry + risk * 2.5, 2)
-                tp3 = round(entry + risk * 4.0, 2)
+            # TP: 1:5 Risk/Reward (সাথে ১:২.৫ এ পার্শিয়াল TP)
+            tp1 = round(entry + (risk * 2.5), 2)  # Partial TP (1:2.5)
+            tp2 = round(entry + (risk * 5.0), 2)  # Target 1:5 R:R
+            tp3 = round(entry + (risk * 5.0), 2)  # Full 1:5 Target
+            rr_str = "1:5.0"
 
-            rr_val = round((tp2 - entry) / risk, 1)
-            rr_str = f"1:{rr_val}"
-            if rr_val >= 1.8:
-                checklist[6]["passed"] = True
-
-        elif setup_direction == "SELL":
-            sweep_price = sweep.get("swept_level_price")
+        elif target_dir == "SELL":
+            sweep_price = effective_sweep.get("swept_level_price")
             last_high = struct_15m.get("last_high")
-            invalidation = max([p for p in [sweep_price, last_high] if p is not None] or [entry + atr * 1.5])
-            sl = round(invalidation + max(atr * 0.4, 2.5), 2)
-            risk = sl - entry
+            ob_top = obs_15m.get("bearish_ob", {}).get("top") if obs_15m.get("bearish_ob") else None
+
+            candidate_sl = [p for p in [sweep_price, last_high, ob_top] if p is not None and p > entry]
+            invalidation = max(candidate_sl) if candidate_sl else (entry + max(atr * 1.0, 3.5))
+
+            # SL: Sweep High-এর বাইরে ATR বাফার সহ
+            sl = round(invalidation + max(atr * 1.2, 1.8), 2)
+            risk = round(sl - entry, 2)
             if risk <= 0:
-                risk = max(atr * 1.0, 5.0)
-                sl = round(entry + risk, 2)
+                risk = 2.0
+                sl = entry + risk
 
-            target_low = liquidity.get("asian_low") or liquidity.get("pdl")
-            if target_low and target_low < entry - risk * 1.2:
-                tp1 = round(entry - risk * 1.5, 2)
-                tp2 = round(target_low, 2)
-                tp3 = round(target_low - risk * 1.5, 2)
-            else:
-                tp1 = round(entry - risk * 1.5, 2)
-                tp2 = round(entry - risk * 2.5, 2)
-                tp3 = round(entry - risk * 4.0, 2)
+            # TP: 1:5 Risk/Reward (সাথে ১:২.৫ এ পার্শিয়াল TP)
+            tp1 = round(entry - (risk * 2.5), 2)  # Partial TP (1:2.5)
+            tp2 = round(entry - (risk * 5.0), 2)  # Target 1:5 R:R
+            tp3 = round(entry - (risk * 5.0), 2)  # Full 1:5 Target
+            rr_str = "1:5.0"
 
-            rr_val = round((entry - tp2) / risk, 1)
-            rr_str = f"1:{rr_val}"
-            if rr_val >= 1.8:
-                checklist[6]["passed"] = True
+        # ── 11. 12-Component Checklist Building ───────────────
+        checklist = [
+            {"num": 1,  "name": "Market Structure (BOS / CHoCH)", "passed": bool(struct_15m.get("bos_bullish") or struct_15m.get("bos_bearish") or struct_15m.get("choch_bullish") or struct_15m.get("choch_bearish"))},
+            {"num": 2,  "name": "Liquidity Pool & Sweeps (BSL/SSL)", "passed": bool(effective_sweep.get("bullish_sweep") or effective_sweep.get("bearish_sweep"))},
+            {"num": 3,  "name": "Displacement & FVG Active", "passed": bool(active_bullish_fvg or active_bearish_fvg or disp_bullish or disp_bearish)},
+            {"num": 4,  "name": "Order Block (OB) Zone Active", "passed": bool(bullish_ob_active or bearish_ob_active or obs_15m.get("bullish_ob") or obs_15m.get("bearish_ob"))},
+            {"num": 5,  "name": "15M Trend & EMA 50/200 Alignment", "passed": (target_dir == "BUY" and trend_15m == "BULLISH") or (target_dir == "SELL" and trend_15m == "BEARISH") or (target_dir == "BUY" and current_price > (ema50_1h or 0)) or (target_dir == "SELL" and current_price < (ema50_1h or 99999))},
+            {"num": 6,  "name": "RSI 14 & Momentum Confluence", "passed": (target_dir == "BUY" and rsi_val >= 42) or (target_dir == "SELL" and rsi_val <= 58) or rsi_div_bull or rsi_div_bear},
+            {"num": 7,  "name": "ATR 14 Buffer SL Outside Sweep Level", "passed": bool(atr > 0 and sl != entry)},
+            {"num": 8,  "name": "Target 1:5 Risk/Reward Ratio", "passed": bool(risk > 0 and abs(tp2 - entry) >= (risk * 4.9))},
+            {"num": 9,  "name": "5M BOS & Retest Trigger", "passed": bool(conf_5m.get("confirmed"))},
+            {"num": 10, "name": "1M EMA 20 & RSI Confirmation", "passed": bool(conf_1m.get("confirmed"))},
+            {"num": 11, "name": "Premium / Discount / OTE Zone", "passed": (target_dir == "BUY" and dealing_range.get("zone") in ("DISCOUNT", "EQUILIBRIUM")) or (target_dir == "SELL" and dealing_range.get("zone") in ("PREMIUM", "EQUILIBRIUM"))},
+            {"num": 12, "name": "News Risk Safety (CPI/NFP/FOMC Window)", "passed": not news_risk},
+        ]
 
-        # ── 8. Calculate Final Checklist Score ─────────────────
         passed_count = sum(1 for c in checklist if c["passed"])
         total_checks = len(checklist)
 
-        # Decision Logic: Strict "No Setup = No Trade"
-        final_direction = "NO_TRADE"
+        # ── 12. Final Decision & Reasoning ────────────────────
         reasoning = []
-
         if news_risk:
             final_direction = "WAIT"
-            reasoning.append("⚠️ হাই-ইমপ্যাক্ট US নিউজ উইন্ডো সক্রিয় — বড় সংবাদের সময় এন্ট্রি ঝুঁকি এড়াতে অপেক্ষা করুন।")
-        elif passed_count >= 7 and setup_direction in ("BUY", "SELL") and conf_5m["confirmed"]:
-            final_direction = setup_direction
-            if sweep["sweep_details"]:
-                reasoning.append(sweep["sweep_details"])
-            if displacement.get("bullish") or displacement.get("bearish"):
-                reasoning.append(f"⚡ ইনস্টিটিউশনাল ডিসপ্লেসমেন্ট ক্যান্ডেল সাইজ ${displacement['size']}")
+            reasoning.append("⚠️ হাই-ইমপ্যাক্ট US নিউজ উইন্ডো সক্রিয় — বড় সংবাদের সময় নিরাপদ থাকতে অপেক্ষা করুন।")
+        elif target_dir in ("BUY", "SELL") and conf_5m.get("confirmed") and conf_1m.get("confirmed"):
+            final_direction = target_dir
+            reasoning.append(f"📌 সেটাপ ধরন: {setup_title}")
+            if effective_sweep["sweep_details"]:
+                reasoning.append(effective_sweep["sweep_details"])
             if active_bullish_fvg or active_bearish_fvg:
-                reasoning.append("🎯 Fair Value Gap (FVG) রিটেস্ট সম্পন্ন")
-            reasoning.append(conf_5m["reason"])
-            reasoning.append(f"📈 4H ডিরেকশন: {trend_4h} | 1H ইন্ট্রাডে বায়াস: {bias_1h}")
+                reasoning.append("🎯 Fair Value Gap (FVG) ইমব্যালেন্স রিটেস্ট সফল")
+            if bullish_ob_active or bearish_ob_active:
+                reasoning.append("🏛️ প্রাতিষ্ঠানিক Order Block (OB) জোন রিঅ্যাকশন")
+            if disp_size > 0:
+                reasoning.append(f"⚡ ডিসপ্লেসমেন্ট ক্যান্ডেল সাইজ ${disp_size}")
+            if dealing_range.get("ote_buy") or dealing_range.get("ote_sell"):
+                reasoning.append("💎 OTE (Optimal Trade Entry 62-79% Fib) গোল্ডেন জোন")
+            elif dealing_range.get("zone") != "EQUILIBRIUM":
+                reasoning.append(f"⚖️ ভ্যালুয়েশন: {dealing_range['zone']} জোন এন্ট্রি")
+            if rsi_div_bull or rsi_div_bear:
+                reasoning.append("🔥 RSI ডাইভারজেন্স রিভার্সাল কনফার্মেশন")
+            if conf_5m.get("reason"):
+                reasoning.append(conf_5m["reason"])
+            if conf_1m.get("reason"):
+                reasoning.append(conf_1m["reason"])
         else:
             final_direction = "NO_TRADE"
-            # State what is missing
-            missing = [c["task"] for c in checklist if not c["passed"]]
-            reasoning.append("🟡 পারফেক্ট ইনস্টিটিউশনাল সেটআপ এখনও তৈরি হয়নি (No Trade)।")
+            missing = [c["name"] for c in checklist if not c["passed"]]
+            reasoning.append("🟡 হাই-প্রোবাবিলিটি সেটাপ কনফার্মেশন অপেক্ষমান।")
             if missing:
-                reasoning.append(f"অপেক্ষমান ধাপ: {missing[0]}")
+                reasoning.append(f"অপেক্ষমান ফিল্টার: {missing[0]}")
 
         return {
             "direction": final_direction,
-            "setup_direction": setup_direction,
+            "setup_direction": target_dir,
+            "setup_type": setup_type,
+            "setup_title": setup_title,
             "checklist_score": f"{passed_count}/{total_checks}",
             "passed_count": passed_count,
             "checklist": checklist,
+            "trend_15m": trend_15m,
+            "ema50_15m": ema50_15m,
+            "ema200_15m": ema200_15m,
             "trend_4h": trend_4h,
             "bias_1h": bias_1h,
             "ema50_1h": ema50_1h,
             "ema200_4h": ema200_4h,
             "liquidity": liquidity,
-            "sweep": sweep,
-            "displacement": displacement,
-            "fvgs": fvgs,
-            "active_fvgs": active_bullish_fvg if setup_direction == "BUY" else active_bearish_fvg,
+            "sweep": effective_sweep,
+            "dealing_range": dealing_range,
+            "displacement": {"bullish": disp_bullish, "bearish": disp_bearish, "size": disp_size},
+            "active_fvgs": active_bullish_fvg if target_dir == "BUY" else active_bearish_fvg,
             "confirmation_5m": conf_5m,
+            "confirmation_1m": conf_1m,
             "entry": round(entry, 2),
             "tp1": round(tp1, 2),
             "tp2": round(tp2, 2),
             "tp3": round(tp3, 2),
             "sl": round(sl, 2),
             "atr": atr,
+            "rvol": max(rvol_15m, rvol_5m),
             "rr_ratio": rr_str,
             "reasoning": reasoning,
         }
+

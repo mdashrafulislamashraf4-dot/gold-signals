@@ -25,11 +25,12 @@ ALPHA_VANTAGE_KEY    = os.getenv("ALPHA_VANTAGE_KEY", "")
 
 # ── System ────────────────────────────────────────────────
 TIMEZONE                = os.getenv("TIMEZONE", "Asia/Dhaka")
-SIGNAL_CHECK_INTERVAL   = int(os.getenv("SIGNAL_CHECK_INTERVAL", "1"))
+SIGNAL_CHECK_INTERVAL   = int(os.getenv("SIGNAL_CHECK_INTERVAL", "5"))
 RISK_PER_TRADE          = float(os.getenv("RISK_PER_TRADE", "0.5"))   # 0.25% - 0.5% per trade
-MIN_CONFIDENCE          = int(os.getenv("MIN_CONFIDENCE", "70"))
-NEWS_CHECK_INTERVAL     = int(os.getenv("NEWS_CHECK_INTERVAL", "15"))
-DAILY_REPORT_TIME       = os.getenv("DAILY_REPORT_TIME", "23:59")
+MIN_CONFIDENCE              = int(os.getenv("MIN_CONFIDENCE", "70"))
+NEWS_CHECK_INTERVAL_SECONDS = int(os.getenv("NEWS_CHECK_INTERVAL_SECONDS", os.getenv("NEWS_CHECK_INTERVAL", "30")))
+NEWS_CHECK_INTERVAL         = NEWS_CHECK_INTERVAL_SECONDS  # backward compatibility
+DAILY_REPORT_TIME           = os.getenv("DAILY_REPORT_TIME", "23:59")
 
 # ── Trading ───────────────────────────────────────────────
 GOLD_SYMBOL  = os.getenv("GOLD_SYMBOL", "GC=F")

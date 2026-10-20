@@ -86,6 +86,14 @@ class SignalEngine:
                     sent      INTEGER DEFAULT 0
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS evaluated_news (
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    title     TEXT UNIQUE,
+                    status    TEXT
+                )
+            """)
             conn.commit()
         logger.info("Database initialized")
 
@@ -106,6 +114,8 @@ class SignalEngine:
         # ── 1. Check if Technical Result is from Master Strategy Pipeline ──
         if "checklist_score" in technical_result:
             master_dir = technical_result.get("direction", "NO_TRADE")
+            setup_type = technical_result.get("setup_type", "MASTER_SWING")
+            setup_title = technical_result.get("setup_title", "মাস্টার স্ট্র্যাটেজি")
             ai_dir     = ai_result.get("direction", "NEUTRAL")
             passed     = technical_result.get("passed_count", 0)
 
@@ -119,9 +129,13 @@ class SignalEngine:
                     reasoning = ["⚠️ টেকনিক্যাল সেটআপ তৈরি হলেও AI ম্যাক্রো ভিউ বিপরীত — নিশ্চিত হতে অপেক্ষা করুন।"]
                 else:
                     direction = master_dir
-                    base_conf = 65 + (passed * 3)  # 7 passed = 86%, 8 passed = 89%, 9 passed = 92%
+                    if setup_type == "SCALP":
+                        base_conf = 72 + min(passed * 2, 16)
+                    else:
+                        base_conf = 75 + min(passed * 2, 18)
+
                     if ai_dir == master_dir:
-                        base_conf += 5
+                        base_conf += 4
                     confidence = min(int(base_conf), 95)
                     reasoning = technical_result.get("reasoning", [])
             else:
@@ -145,8 +159,13 @@ class SignalEngine:
             else:
                 suggested_lot = 0.0
 
+            timeframe_str = "15m-5m (Scalp)" if setup_type == "SCALP" else "4H-1H-15m-5m (Intraday)"
+            validity_str  = "১-৩ ঘণ্টা (কুইক স্ক্যাল্প)" if setup_type == "SCALP" else "৪-৮ ঘণ্টা (ইনস্টিটিউশনাল সুইং)"
+
             signal = {
                 "direction":        direction,
+                "setup_type":       setup_type,
+                "setup_title":      setup_title,
                 "entry":            round(entry, 2),
                 "tp1":              round(tp1, 2),
                 "tp2":              round(tp2, 2),
@@ -154,23 +173,25 @@ class SignalEngine:
                 "sl":               round(sl, 2),
                 "confidence":       confidence,
                 "combined_score":   confidence,
-                "tech_score":       int(passed / 9.0 * 100),
+                "tech_score":       int(min(passed / 12.0 * 100, 100)),
                 "news_score":       news_result.get("score", 50),
                 "ai_score":         ai_result.get("confidence", 60),
                 "rr_ratio":         rr_str,
-                "timeframe":        "4H-1H-15m-5m",
-                "risk_level":       "নিম্ন-মাঝারি (Strict 0.5% Risk)",
-                "validity":         "৪-৬ ঘণ্টা (ইন্ট্রাডে সেশন)",
+                "timeframe":        timeframe_str,
+                "risk_level":       "নিয়ন্ত্রিত ঝুঁকি (Strict 0.5% Risk)",
+                "validity":         validity_str,
                 "reasoning":        reasoning,
                 "warnings":         ai_result.get("warnings", []),
                 "patterns":         technical_result.get("active_fvgs", []),
                 "risk_per_trade":   RISK_PER_TRADE,
                 "suggested_lot":    suggested_lot,
-                "checklist_score":  technical_result.get("checklist_score", "0/9"),
+                "checklist_score":  technical_result.get("checklist_score", "0/12"),
                 "checklist":        technical_result.get("checklist", []),
                 "liquidity":        technical_result.get("liquidity", {}),
                 "sweep":            technical_result.get("sweep", {}),
-                "session_info":     technical_result.get("liquidity", {}).get("current_session", ""),
+                "dealing_range":    technical_result.get("dealing_range", {}),
+                "rvol":             technical_result.get("rvol", 1.0),
+                "session_info":     technical_result.get("liquidity", {}).get("current_session", "সার্বক্ষণিক"),
                 "timestamp":        datetime.now(pytz.timezone(TIMEZONE)).isoformat(),
             }
             return signal
