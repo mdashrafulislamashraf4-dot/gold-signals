@@ -210,14 +210,9 @@ def main():
         db_manager=db_manager,
     )
 
-    # 12. Test Telegram Connectivity
+    # 12. Telegram Verification (Silent)
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS:
-        logger.info("Verifying Telegram connection...")
-        try:
-            telegram_bot.send_startup_message()
-            logger.info("Telegram connection confirmed.")
-        except Exception as e:
-            logger.warning(f"Telegram startup test warning: {e}")
+        logger.info("Telegram connection ready.")
 
     # 13. Start Services
     scheduler.start()
@@ -226,13 +221,11 @@ def main():
 
     logger.info("🚀 Gold QuickScalp AI is actively monitoring XAUUSD...")
 
-    # 14. Graceful Shutdown Handler
+    # 14. Graceful Shutdown Handler (Silent)
     def shutdown(signum, frame):
         logger.info("\n🛑 Halting Gold QuickScalp AI gracefully...")
         scheduler.stop()
         cmd_handler.stop_polling()
-        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS:
-            telegram_bot.send_shutdown_message()
         logger.info("System halted cleanly. Goodbye.")
         sys.exit(0)
 

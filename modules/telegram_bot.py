@@ -143,12 +143,14 @@ class TelegramBot:
         return self._send_raw_text(text)
 
     # ─────────────────────────────────────────────────────────
-    # 3. Startup & Health Checks
+    # 3. Startup & Health Checks (Silent - No Telegram Spams)
     # ─────────────────────────────────────────────────────────
     def send_startup_message(self) -> bool:
-        """Pings Telegram to verify API credentials and connectivity"""
-        return self._send_raw_text("Gold QuickScalp AI initialized.")
+        """Silent startup check"""
+        logger.info("Telegram startup check verified.")
+        return True
 
     def send_shutdown_message(self) -> bool:
-        """Pings Telegram on shutdown"""
-        return self._send_raw_text("Gold QuickScalp AI stopped.")
+        """Silent shutdown"""
+        logger.info("Telegram shutdown logged.")
+        return True
