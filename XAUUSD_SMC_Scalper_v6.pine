@@ -1,88 +1,75 @@
 //@version=6
-strategy("XAUUSD SMC Scalper [15M-5M-1M]", shorttitle="Gold SMC Scalper v6", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100, slippage=2, commission_type=strategy.commission.cash_per_contract, commission_value=0.04)
+strategy("AI XAUUSD Dynamic SMC Scalper [15M-5M-1M]", shorttitle="AI Gold Scalper v6", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100, slippage=2, commission_type=strategy.commission.cash_per_contract, commission_value=0.04)
 
 // ==============================================================================
-// 1. INPUTS & CONFIGURATION
+// 1. INPUTS & DYNAMIC CONFIGURATION
 // ==============================================================================
-group_risk   = "Risk Management (রিস্ক ও মানি ম্যানেজমেন্ট)"
-risk_pct     = input.float(0.5, "Risk Per Trade (%)", minval=0.1, maxval=2.0, step=0.05, group=group_risk, tooltip="অ্যাকাউন্ট ব্যালেন্সের কত % রিস্ক নেবেন (০.২৫% - ০.৫% বাঞ্ছনীয়)")
-rr_ratio     = input.float(5.0, "Target Risk:Reward (1:X)", minval=1.5, maxval=10.0, step=0.5, group=group_risk, tooltip="ন্যূনতম Risk:Reward রেশিও (আপনার নিয়মে ১:৫)")
-enable_partial = input.bool(true, "Enable Partial TP (৫০% বুকিং ১:২.৫ এ)", group=group_risk, tooltip="১:২.৫ এ অর্ধেক প্রফিট বুক করে বাকিটা ১:৫ এর জন্য ছেড়ে দেওয়া")
-partial_rr   = input.float(2.5, "Partial TP Risk:Reward", minval=1.0, maxval=4.0, step=0.5, group=group_risk)
-atr_len      = input.int(14, "ATR Length for SL Buffer", minval=5, group=group_risk)
-atr_mult     = input.float(1.2, "ATR Multiplier Buffer", minval=0.5, maxval=3.0, step=0.1, group=group_risk, tooltip="Sweep High/Low এর বাইরে কত ATR বাফার রাখবেন")
+group_risk     = "Risk Management (রিস্ক ও মানি ম্যানেজমেন্ট)"
+risk_pct       = input.float(0.25, "Risk Per Trade (%)", minval=0.1, maxval=0.5, step=0.05, group=group_risk, tooltip="অ্যাকাউন্ট ব্যালেন্সের কত % রিস্ক নেবেন (ডিফল্ট ০.২৫%, সর্বোচ্চ ০.৫০%)")
+target_mode    = input.string("Dynamic Structure Target", "Target Engine Mode", options=["Dynamic Structure Target", "1.0R Scalp", "1.25R Scalp", "1.5R Scalp", "2.0R Structural"], group=group_risk)
+enable_be      = input.bool(true, "Enable Dynamic Break-Even (+1.0R এ এন্ট্রি প্রোটেকশন)", group=group_risk)
+be_trigger_r   = input.float(1.0, "Break-Even Trigger (R)", minval=0.8, maxval=2.0, step=0.1, group=group_risk)
+atr_len        = input.int(14, "ATR Length for SL Buffer", minval=5, group=group_risk)
+atr_mult       = input.float(1.1, "ATR Multiplier Buffer", minval=0.5, maxval=2.5, step=0.1, group=group_risk, tooltip="Sweep Extreme এর বাইরে কত ATR বাফার রাখবেন")
 
-group_htf    = "15M Trend Filter (ম্যাক্রো ট্রেন্ড)"
-htf_tf       = input.timeframe("15", "15M Timeframe", group=group_htf)
-ema_fast_len = input.int(50, "15M Fast EMA", group=group_htf)
-ema_slow_len = input.int(200, "15M Slow EMA", group=group_htf)
+group_htf      = "15M Trend Filter (ম্যাক্রো ট্রেন্ড)"
+htf_tf         = input.timeframe("15", "15M Timeframe", group=group_htf)
+ema_fast_len   = input.int(50, "15M Fast EMA", group=group_htf)
+ema_slow_len   = input.int(200, "15M Slow EMA", group=group_htf)
 
-group_mtf    = "5M Liquidity & Structure (সেটআপ টাইমফ্রেম)"
-mtf_tf       = input.timeframe("5", "5M Timeframe", group=group_mtf)
-pivot_len    = input.int(5, "5M Swing Pivot Lookback", minval=2, maxval=20, group=group_mtf)
+group_mtf      = "5M Liquidity & Structure (সেটআপ টাইমফ্রেম)"
+mtf_tf         = input.timeframe("5", "5M Timeframe", group=group_mtf)
+pivot_len      = input.int(4, "5M Swing Pivot Lookback", minval=2, maxval=15, group=group_mtf)
 
-group_ltf    = "1M Execution Confirmation (ট্রেড এন্ট্রি)"
-m1_ema_len   = input.int(20, "1M EMA Length", group=group_ltf)
-rsi_len      = input.int(14, "1M RSI Length", group=group_ltf)
-rsi_bull_min = input.int(50, "1M Bullish RSI Min", group=group_ltf)
-rsi_bear_max = input.int(50, "1M Bearish RSI Max", group=group_ltf)
+group_ltf      = "1M Execution Confirmation (ট্রেড এন্ট্রি)"
+m1_ema_len     = input.int(20, "1M EMA Length", group=group_ltf)
+rsi_len        = input.int(14, "1M RSI Length", group=group_ltf)
+rsi_bull_min   = input.int(48, "1M Bullish RSI Min", group=group_ltf)
+rsi_bear_max   = input.int(52, "1M Bearish RSI Max", group=group_ltf)
 
-group_sess   = "Session Filter (ট্রেডিং সেশন ফিল্টার)"
-use_session  = input.bool(true, "Filter Trading Sessions", group=group_sess)
-session_time = input.session("0700-1900:23456", "Active Hours (UTC)", group=group_sess, tooltip="লন্ডন ও নিউ ইয়র্ক সেশনের সময়সীমা (UTC)")
-
-// ==============================================================================
-// 2. SESSION & NEWS SAFETY FILTER
-// ==============================================================================
-in_session = not use_session or not na(time(timeframe.period, session_time, "UTC"))
+group_webhook  = "Webhook & Backend Integration"
+webhook_secret = input.string("xauusd-smc-secret-key-2026", "Webhook Secret Token", group=group_webhook)
 
 // ==============================================================================
-// 3. 15M MACRO TREND (NON-REPAINTING)
+// 2. 15M MACRO TREND FILTER (NON-REPAINTING)
 // ==============================================================================
-// barmerge.lookahead_off ও [1] ব্যবহার করে সম্পূর্ণ ক্লোজড ক্যান্ডেল রিড করা হয় (No Repaint)
-f_htf_ema(len) =>
-    ta.ema(close, len)
+// barmerge.lookahead_off ও [1] ব্যবহার করে সম্পূর্ণ ক্লোজড ক্যান্ডেল রিড করা হয় (No Future Leakage)
+f_htf_calc(f_len, s_len) =>
+    e_fast = ta.ema(close, f_len)
+    e_slow = ta.ema(close, s_len)
+    [close[1], e_fast[1], e_slow[1]]
 
-htf_ema50  = request.security(syminfo.tickerid, htf_tf, f_htf_ema(ema_fast_len)[1], barmerge.gaps_off, barmerge.lookahead_off)
-htf_ema200 = request.security(syminfo.tickerid, htf_tf, f_htf_ema(ema_slow_len)[1], barmerge.gaps_off, barmerge.lookahead_off)
-htf_close  = request.security(syminfo.tickerid, htf_tf, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[htf_c, htf_ema50, htf_ema200] = request.security(syminfo.tickerid, htf_tf, f_htf_calc(ema_fast_len, ema_slow_len), barmerge.gaps_off, barmerge.lookahead_off)
 
-htf_bullish = (htf_close > htf_ema50) and (htf_ema50 > htf_ema200)
-htf_bearish = (htf_close < htf_ema50) and (htf_ema50 < htf_ema200)
+htf_bullish = (htf_c > htf_ema50) and (htf_ema50 > htf_ema200)
+htf_bearish = (htf_c < htf_ema50) and (htf_ema50 < htf_ema200)
 
 // ==============================================================================
-// 4. 5M SMC LOGIC (SWEEP + BOS + FVG)
+// 3. 5M SMC SETUP LOGIC (LIQUIDITY SWEEP + SWINGS + FVG)
 // ==============================================================================
-// 5M ক্যান্ডেল ক্লোজড ডেটা
 f_mtf_data() =>
     ph = ta.pivothigh(high, pivot_len, pivot_len)
     pl = ta.pivotlow(low, pivot_len, pivot_len)
     last_ph = ta.valuewhen(not na(ph), high[pivot_len], 0)
     last_pl = ta.valuewhen(not na(pl), low[pivot_len], 0)
-    
-    // Liquidity Sweep (High বা Low স্পর্শ করে রিজেকশন)
-    bull_sweep = (low < last_pl) and (close > last_pl)
-    bear_sweep = (high > last_ph) and (close < last_ph)
-    
-    // Fair Value Gap (FVG)
-    bull_fvg_top = low
-    bull_fvg_bot = high[2]
-    is_bull_fvg  = bull_fvg_bot < bull_fvg_top
-    
-    bear_fvg_top = low[2]
-    bear_fvg_bot = high
-    is_bear_fvg  = bear_fvg_bot < bear_fvg_top
-    
-    [last_ph, last_pl, bull_sweep, bear_sweep, is_bull_fvg, bull_fvg_top, bull_fvg_bot, is_bear_fvg, bear_fvg_top, bear_fvg_bot, low, high]
 
-[m5_ph, m5_pl, m5_bull_sweep, m5_bear_sweep, m5_is_bfvg, m5_bfvg_top, m5_bfvg_bot, m5_is_sfvg, m5_sfvg_top, m5_sfvg_bot, m5_low, m5_high] = 
+    // Liquidity Sweeps
+    bull_sw = (low < last_pl) and (close > last_pl)
+    bear_sw = (high > last_ph) and (close < last_ph)
+
+    // FVG Imbalance
+    bull_fvg = (low > high[2])
+    bear_fvg = (high < low[2])
+
+    [last_ph, last_pl, bull_sw, bear_sw, bull_fvg, bear_fvg, low, high]
+
+[m5_ph, m5_pl, m5_bull_sweep, m5_bear_sweep, m5_bfvg, m5_sfvg, m5_low, m5_high] = 
      request.security(syminfo.tickerid, mtf_tf, f_mtf_data(), barmerge.gaps_off, barmerge.lookahead_off)
 
-// Sweep মেমোরি (গত ১০টি 5M বারের মধ্যে সুইপ হয়েছিল কি না)
 var int last_bull_sweep_bar = 0
 var int last_bear_sweep_bar = 0
-var float sweep_low_level = na
-var float sweep_high_level = na
+var float sweep_low_level   = na
+var float sweep_high_level  = na
 
 if m5_bull_sweep
     last_bull_sweep_bar := bar_index
@@ -97,7 +84,7 @@ bull_sweep_active = (bar_index - last_bull_sweep_bar) <= 30 and not na(sweep_low
 bear_sweep_active = (bar_index - last_bear_sweep_bar) <= 30 and not na(sweep_high_level)
 
 // ==============================================================================
-// 5. 1M EXECUTION CONFIRMATION (CHART TIMEFRAME)
+// 4. 1M EXECUTION CONFIRMATION (CHART TIMEFRAME)
 // ==============================================================================
 m1_ema20 = ta.ema(close, m1_ema_len)
 m1_rsi   = ta.rsi(close, rsi_len)
@@ -108,131 +95,139 @@ m1_bull_conf = (close > m1_ema20) and (m1_rsi >= rsi_bull_min) and (close > open
 m1_bear_conf = (close < m1_ema20) and (m1_rsi <= rsi_bear_max) and (close < open)
 
 // ==============================================================================
-// 6. FINAL SIGNAL GENERATION
+// 5. ENTRY CONDITIONS & DYNAMIC TP/SL CALCULATION
 // ==============================================================================
-buy_condition  = in_session and htf_bullish and bull_sweep_active and m1_bull_conf and (strategy.position_size == 0)
-sell_condition = in_session and htf_bearish and bear_sweep_active and m1_bear_conf and (strategy.position_size == 0)
+buy_trigger  = htf_bullish and bull_sweep_active and m1_bull_conf and (strategy.position_size == 0)
+sell_trigger = htf_bearish and bear_sweep_active and m1_bear_conf and (strategy.position_size == 0)
 
-// ==============================================================================
-// 7. ORDER EXECUTION & RISK MANAGEMENT
-// ==============================================================================
-var float long_sl  = na
-var float long_tp1 = na
-var float long_tp2 = na
+var float trade_sl  = na
+var float trade_tp  = na
+var float trade_be  = na
+var float entry_px  = na
+var bool  be_active = false
 
-var float short_sl  = na
-var float short_tp1 = na
-var float short_tp2 = na
-
-// পয়েন্ট ভ্যালু ক্যালকুলেশন (Gold ও অন্যান্য মেটালের জন্য সঠিক লট সাইজিং)
 point_value = syminfo.pointvalue > 0 ? syminfo.pointvalue : 1.0
 
-if buy_condition
-    // SL = 5M Sweep Low - ATR Buffer
-    buffer = m1_atr * atr_mult
-    raw_sl = sweep_low_level - buffer
-    long_sl := raw_sl < close ? raw_sl : close - (m1_atr * 1.5)
-    
-    risk_dist = close - long_sl
-    if risk_dist > 0
-        long_tp1 := close + (risk_dist * partial_rr)
-        long_tp2 := close + (risk_dist * rr_ratio)
-        
-        // অ্যাকাউন্ট ইক্যুইটির রিস্ক ক্যালকুলেশন
-        risk_cash = strategy.equity * (risk_pct / 100.0)
-        calc_qty  = risk_cash / (risk_dist * point_value)
-        qty       = math.max(calc_qty, syminfo.mincontract)
-        
-        strategy.entry("BUY", strategy.long, qty=qty)
-        last_bull_sweep_bar := 0 // রিসেট
-        alert("XAUUSD SMC Scalper: BUY Signal Triggered! SL: " + str.tostring(long_sl, "#.##") + " TP: " + str.tostring(long_tp2, "#.##"), alert.freq_once_per_bar_close)
+if buy_trigger
+    buffer   = m1_atr * atr_mult
+    raw_sl   = sweep_low_level - buffer
+    trade_sl := (raw_sl < close and (close - raw_sl) >= 1.5) ? raw_sl : close - math.max(m1_atr * 1.2, 1.8)
+    risk_dist = close - trade_sl
+    entry_px := close
+    be_active := false
 
-if sell_condition
-    // SL = 5M Sweep High + ATR Buffer
-    buffer = m1_atr * atr_mult
-    raw_sl = sweep_high_level + buffer
-    short_sl := raw_sl > close ? raw_sl : close + (m1_atr * 1.5)
-    
-    risk_dist = short_sl - close
-    if risk_dist > 0
-        short_tp1 := close - (risk_dist * partial_rr)
-        short_tp2 := close - (risk_dist * rr_ratio)
-        
-        // অ্যাকাউন্ট ইক্যুইটির রিস্ক ক্যালকুলেশন
-        risk_cash = strategy.equity * (risk_pct / 100.0)
-        calc_qty  = risk_cash / (risk_dist * point_value)
-        qty       = math.max(calc_qty, syminfo.mincontract)
-        
-        strategy.entry("SELL", strategy.short, qty=qty)
-        last_bear_sweep_bar := 0 // রিসেট
-        alert("XAUUSD SMC Scalper: SELL Signal Triggered! SL: " + str.tostring(short_sl, "#.##") + " TP: " + str.tostring(short_tp2, "#.##"), alert.freq_once_per_bar_close)
-
-// এক্সিট লজিক (Partial ও Full TP সহ)
-if strategy.position_size > 0
-    if enable_partial
-        strategy.exit("BUY Partial TP", "BUY", qty_percent=50, limit=long_tp1, stop=long_sl)
-        strategy.exit("BUY Full TP", "BUY", limit=long_tp2, stop=long_sl)
+    // Dynamic Target Selection
+    if target_mode == "1.0R Scalp"
+        trade_tp := close + (risk_dist * 1.0)
+    else if target_mode == "1.25R Scalp"
+        trade_tp := close + (risk_dist * 1.25)
+    else if target_mode == "1.5R Scalp"
+        trade_tp := close + (risk_dist * 1.5)
+    else if target_mode == "2.0R Structural"
+        trade_tp := close + (risk_dist * 2.0)
     else
-        strategy.exit("BUY Exit", "BUY", limit=long_tp2, stop=long_sl)
+        // Dynamic Structure: Opposing 5M Swing High front-run
+        opposing_high = not na(m5_ph) and m5_ph > close ? (m5_ph - 0.25) : (close + risk_dist * 1.35)
+        trade_tp := opposing_high
 
-if strategy.position_size < 0
-    if enable_partial
-        strategy.exit("SELL Partial TP", "SELL", qty_percent=50, limit=short_tp1, stop=short_sl)
-        strategy.exit("SELL Full TP", "SELL", limit=short_tp2, stop=short_sl)
+    // Position sizing
+    risk_cash = strategy.equity * (risk_pct / 100.0)
+    calc_qty  = risk_cash / (risk_dist * point_value)
+    qty       = math.max(calc_qty, syminfo.mincontract)
+
+    strategy.entry("BUY", strategy.long, qty=qty)
+    last_bull_sweep_bar := 0
+
+    // Webhook JSON Alert Message
+    alert_json = '{"secret":"' + webhook_secret + '","action":"BUY","symbol":"XAUUSD","entry":' + str.tostring(close, "#.##") + ',"sl":' + str.tostring(trade_sl, "#.##") + ',"tp":' + str.tostring(trade_tp, "#.##") + ',"risk_pct":' + str.tostring(risk_pct) + '}'
+    alert(alert_json, alert.freq_once_per_bar_close)
+
+if sell_trigger
+    buffer   = m1_atr * atr_mult
+    raw_sl   = sweep_high_level + buffer
+    trade_sl := (raw_sl > close and (raw_sl - close) >= 1.5) ? raw_sl : close + math.max(m1_atr * 1.2, 1.8)
+    risk_dist = trade_sl - close
+    entry_px := close
+    be_active := false
+
+    if target_mode == "1.0R Scalp"
+        trade_tp := close - (risk_dist * 1.0)
+    else if target_mode == "1.25R Scalp"
+        trade_tp := close - (risk_dist * 1.25)
+    else if target_mode == "1.5R Scalp"
+        trade_tp := close - (risk_dist * 1.5)
+    else if target_mode == "2.0R Structural"
+        trade_tp := close - (risk_dist * 2.0)
     else
-        strategy.exit("SELL Exit", "SELL", limit=short_tp2, stop=short_sl)
+        // Dynamic Structure: Opposing 5M Swing Low front-run
+        opposing_low = not na(m5_pl) and m5_pl < close ? (m5_pl + 0.25) : (close - risk_dist * 1.35)
+        trade_tp := opposing_low
+
+    risk_cash = strategy.equity * (risk_pct / 100.0)
+    calc_qty  = risk_cash / (risk_dist * point_value)
+    qty       = math.max(calc_qty, syminfo.mincontract)
+
+    strategy.entry("SELL", strategy.short, qty=qty)
+    last_bear_sweep_bar := 0
+
+    alert_json = '{"secret":"' + webhook_secret + '","action":"SELL","symbol":"XAUUSD","entry":' + str.tostring(close, "#.##") + ',"sl":' + str.tostring(trade_sl, "#.##") + ',"tp":' + str.tostring(trade_tp, "#.##") + ',"risk_pct":' + str.tostring(risk_pct) + '}'
+    alert(alert_json, alert.freq_once_per_bar_close)
 
 // ==============================================================================
-// 8. PLOTTING & VISUALS
+// 6. DYNAMIC BREAK-EVEN & TRADE EXITS
+// ==============================================================================
+if strategy.position_size > 0
+    // Check BE
+    if enable_be and not be_active and (close >= entry_px + (entry_px - trade_sl) * be_trigger_r)
+        trade_sl := entry_px + 0.15
+        be_active := true
+    strategy.exit("BUY Exit", "BUY", limit=trade_tp, stop=trade_sl)
+
+if strategy.position_size < 0
+    if enable_be and not be_active and (close <= entry_px - (trade_sl - entry_px) * be_trigger_r)
+        trade_sl := entry_px - 0.15
+        be_active := true
+    strategy.exit("SELL Exit", "SELL", limit=trade_tp, stop=trade_sl)
+
+// ==============================================================================
+// 7. VISUALS & ON-CHART STATUS DASHBOARD
 // ==============================================================================
 plot(m1_ema20, "1M EMA 20", color=color.new(color.yellow, 20), linewidth=2)
 plot(htf_ema50, "15M EMA 50 (MTF)", color=color.new(color.blue, 40), linewidth=2)
 plot(htf_ema200, "15M EMA 200 (MTF)", color=color.new(color.purple, 40), linewidth=2)
 
-// চার্টে SL ও TP লেভেল ড্র করা
-plot(strategy.position_size > 0 ? long_sl : na, "Long SL", color=color.red, style=plot.style_linebr, linewidth=2)
-plot(strategy.position_size > 0 ? long_tp2 : na, "Long TP (1:5)", color=color.green, style=plot.style_linebr, linewidth=2)
-plot(strategy.position_size < 0 ? short_sl : na, "Short SL", color=color.red, style=plot.style_linebr, linewidth=2)
-plot(strategy.position_size < 0 ? short_tp2 : na, "Short TP (1:5)", color=color.green, style=plot.style_linebr, linewidth=2)
+plot(strategy.position_size > 0 ? trade_sl : na, "Long SL", color=color.red, style=plot.style_linebr, linewidth=2)
+plot(strategy.position_size > 0 ? trade_tp : na, "Long TP", color=color.green, style=plot.style_linebr, linewidth=2)
+plot(strategy.position_size < 0 ? trade_sl : na, "Short SL", color=color.red, style=plot.style_linebr, linewidth=2)
+plot(strategy.position_size < 0 ? trade_tp : na, "Short TP", color=color.green, style=plot.style_linebr, linewidth=2)
 
-// সিগন্যাল মার্কার
-plotshape(buy_condition, title="BUY Signal Label", style=shape.labelup, location=location.belowbar, color=color.green, text="BUY", textcolor=color.white, size=size.normal)
-plotshape(sell_condition, title="SELL Signal Label", style=shape.labeldown, location=location.abovebar, color=color.red, text="SELL", textcolor=color.white, size=size.normal)
+plotshape(buy_trigger, title="BUY Signal Label", style=shape.labelup, location=location.belowbar, color=color.green, text="BUY", textcolor=color.white, size=size.normal)
+plotshape(sell_trigger, title="SELL Signal Label", style=shape.labeldown, location=location.abovebar, color=color.red, text="SELL", textcolor=color.white, size=size.normal)
 
-// ==============================================================================
-// 9. ON-SCREEN STATUS DASHBOARD
-// ==============================================================================
 var table dash = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 20), border_color=color.gray, border_width=1)
-
 if barstate.islast
-    // হেডার
-    table.cell(dash, 0, 0, "XAUUSD SMC Scalper", bgcolor=color.new(color.blue, 30), text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 0, "Status", bgcolor=color.new(color.blue, 30), text_color=color.white, text_size=size.small)
-    
-    // সেশন
-    table.cell(dash, 0, 1, "Active Session", text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 1, in_session ? "YES" : "NO (News/Off)", bgcolor=in_session ? color.new(color.green, 40) : color.new(color.red, 40), text_color=color.white, text_size=size.small)
-    
-    // 15M ট্রেন্ড
-    string htf_txt = htf_bullish ? "Bullish (Uptrend)" : (htf_bearish ? "Bearish (Downtrend)" : "Range / Neutral")
+    table.cell(dash, 0, 0, "AI XAUUSD Scalper", bgcolor=color.new(color.blue, 30), text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, "v6 Dynamic", bgcolor=color.new(color.blue, 30), text_color=color.white, text_size=size.small)
+
+    table.cell(dash, 0, 1, "Target Mode", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 1, target_mode, bgcolor=color.new(color.teal, 50), text_color=color.white, text_size=size.small)
+
+    string htf_txt = htf_bullish ? "Bullish (15M)" : (htf_bearish ? "Bearish (15M)" : "Neutral")
     color htf_col  = htf_bullish ? color.green : (htf_bearish ? color.red : color.gray)
     table.cell(dash, 0, 2, "15M Trend", text_color=color.white, text_size=size.small)
     table.cell(dash, 1, 2, htf_txt, bgcolor=color.new(htf_col, 50), text_color=color.white, text_size=size.small)
-    
-    // 5M সুইপ
-    string sweep_txt = bull_sweep_active ? "Low Swept (Bullish)" : (bear_sweep_active ? "High Swept (Bearish)" : "Waiting")
+
+    string sweep_txt = bull_sweep_active ? "Low Swept (Buy)" : (bear_sweep_active ? "High Swept (Sell)" : "Waiting")
     color sweep_col  = bull_sweep_active ? color.green : (bear_sweep_active ? color.red : color.gray)
-    table.cell(dash, 0, 3, "5M Sweep Setup", text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 3, "5M Sweep", text_color=color.white, text_size=size.small)
     table.cell(dash, 1, 3, sweep_txt, bgcolor=color.new(sweep_col, 50), text_color=color.white, text_size=size.small)
-    
-    // 1M কনফার্মেশন
-    string m1_txt = m1_bull_conf ? "Bullish Ready" : (m1_bear_conf ? "Bearish Ready" : "Waiting")
+
+    string m1_txt = m1_bull_conf ? "Bullish Confirmed" : (m1_bear_conf ? "Bearish Confirmed" : "Waiting")
     color m1_col  = m1_bull_conf ? color.green : (m1_bear_conf ? color.red : color.gray)
     table.cell(dash, 0, 4, "1M Trigger", text_color=color.white, text_size=size.small)
     table.cell(dash, 1, 4, m1_txt, bgcolor=color.new(m1_col, 50), text_color=color.white, text_size=size.small)
-    
-    // সার্বিক সিগন্যাল
-    string final_sig = buy_condition or strategy.position_size > 0 ? "BUY ACTIVE" : (sell_condition or strategy.position_size < 0 ? "SELL ACTIVE" : "NO TRADE")
-    color final_col  = strategy.position_size > 0 ? color.green : (strategy.position_size < 0 ? color.red : color.orange)
-    table.cell(dash, 0, 5, "Strategy Signal", text_color=color.white, text_size=size.small)
+
+    string final_sig = strategy.position_size > 0 ? "LONG ACTIVE" : (strategy.position_size < 0 ? "SHORT ACTIVE" : "NO TRADE")
+    color final_col  = strategy.position_size > 0 ? color.green : (strategy.position_size < 0 ? color.red : color.gray)
+    table.cell(dash, 0, 5, "Position", text_color=color.white, text_size=size.small)
     table.cell(dash, 1, 5, final_sig, bgcolor=color.new(final_col, 30), text_color=color.white, text_size=size.small)

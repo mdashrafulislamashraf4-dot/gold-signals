@@ -1,113 +1,185 @@
 """
 ============================================================
   modules/market_data.py
-  XAUUSD মার্কেট ডেটা ফেচ করার মডিউল
-  Sources: yfinance (Free), Investing.com RSS
+  XAUUSD Market Data Ingestion & Health Engine
+  TradingView OANDA:XAUUSD CFD Feed + Gold-API Spot + yfinance
+  Strict Normalization, Freshness Tracking & Outlier Guardrails
 ============================================================
 """
 
 import logging
 import time
-from datetime import datetime, timedelta, timezone
-from typing import Optional
-
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any
 import pandas as pd
 import requests
 import yfinance as yf
+
+from config import GOLD_SYMBOL
 
 logger = logging.getLogger(__name__)
 
 
 class MarketDataFetcher:
-    """গোল্ড মার্কেটের সব ধরনের ডেটা ফেচ করে"""
+    """Ingests multi-timeframe OHLCV (M15, M5, M1), live bids, asks, and spreads for XAUUSD only"""
 
-    GOLD_SYMBOLS = ["GC=F", "XAUUSD=X"]
-    CORRELATED   = {
-        "DXY":  "DX-Y.NYB",   # US Dollar Index
-        "SPX":  "^GSPC",      # S&P 500
-        "US10Y": "^TNX",      # 10-Year Treasury
-        "VIX":  "^VIX",       # Volatility Index
-        "OIL":  "CL=F",       # Crude Oil
-        "SILVER": "SI=F",     # Silver
-    }
+    GOLD_SYMBOLS = [GOLD_SYMBOL, "GC=F", "XAUUSD=X"]
 
     def __init__(self):
-        self._price_cache: dict = {}
-        self._cache_time: dict  = {}
-        self.cache_ttl = 60  # seconds
+        self._price_cache: Dict[str, Any] = {}
+        self._last_snapshot_time = 0.0
+        self._last_successful_fetch = 0.0
+        self._last_provider = "UNKNOWN"
+        self._consecutive_failures = 0
+        self.default_spread = 0.25  # Standard spot gold spread ($0.25)
 
     # ─────────────────────────────────────────────────────────
-    # Current Price
+    # Live Market Snapshot (Price, Bid, Ask, Spread, Freshness)
     # ─────────────────────────────────────────────────────────
-    def get_current_price(self) -> Optional[float]:
+    def get_market_snapshot(self) -> Dict[str, Any]:
         """
-        বর্তমান গোল্ড প্রাইস ফেচ করে — সরাসরি TradingView OANDA:XAUUSD থেকে
+        Fetches current price, bid, ask, spread, and freshness timestamp for XAUUSD.
+        Prioritizes real-time TradingView OANDA:XAUUSD CFD feed.
         """
-        # 1) Try TradingView CFD Scanner API directly for OANDA:XAUUSD (100% exact match)
+        now = time.time()
+        # Fast cache for 2.0 seconds to prevent rate-limit bursts
+        if self._price_cache and (now - self._last_snapshot_time) < 2.0:
+            return self._price_cache
+
+        # 1. TradingView CFD Scanner (OANDA:XAUUSD)
         try:
             url = "https://scanner.tradingview.com/cfd/scan"
             payload = {
                 "symbols": {"tickers": ["OANDA:XAUUSD"]},
-                "columns": ["close"]
+                "columns": ["close", "bid", "ask", "change"]
             }
-            resp = requests.post(url, json=payload, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+            resp = requests.post(url, json=payload, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
             if resp.ok:
                 data = resp.json()
                 rows = data.get("data", [])
-                if rows and len(rows[0].get("d", [])) > 0:
-                    price = rows[0]["d"][0]
-                    if price and price > 0:
-                        logger.info(f"Gold spot price from TradingView (OANDA:XAUUSD): {price}")
-                        return round(float(price), 2)
-        except Exception as e:
-            logger.warning(f"TradingView scanner fetch failed: {e}")
+                if rows and len(rows[0].get("d", [])) >= 3:
+                    vals = rows[0]["d"]
+                    price = float(vals[0]) if vals[0] else None
+                    bid = float(vals[1]) if vals[1] else (price - 0.12 if price else None)
+                    ask = float(vals[2]) if vals[2] else (price + 0.13 if price else None)
+                    spread = round(ask - bid, 2) if (bid and ask and ask >= bid) else self.default_spread
+                    if spread <= 0.0 or spread > 3.0:
+                        spread = self.default_spread
 
-        # 2) Try Gold-API spot price (Free live spot)
+                    if price and price > 0:
+                        snapshot = {
+                            "price": round(price, 2),
+                            "bid": round(bid, 2) if bid else round(price - spread / 2, 2),
+                            "ask": round(ask, 2) if ask else round(price + spread / 2, 2),
+                            "spread": spread,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "provider": "TradingView (OANDA:XAUUSD)",
+                            "is_stale": False,
+                            "data_age_seconds": 0,
+                            "is_market_open": self.is_market_open(),
+                        }
+                        self._price_cache = snapshot
+                        self._last_snapshot_time = now
+                        self._last_successful_fetch = now
+                        self._last_provider = "TradingView (OANDA:XAUUSD)"
+                        self._consecutive_failures = 0
+                        return snapshot
+        except Exception as e:
+            logger.debug(f"TradingView scanner fetch note: {e}")
+
+        # 2. Gold-API Spot Fallback
         try:
             url = "https://api.gold-api.com/price/XAU"
-            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
             if resp.ok:
                 data = resp.json()
                 price = data.get("price")
-                if price and price > 0:
-                    logger.info(f"Gold spot price from Gold-API: {price}")
-                    return round(float(price), 2)
+                if price and float(price) > 0:
+                    p = round(float(price), 2)
+                    snapshot = {
+                        "price": p,
+                        "bid": round(p - self.default_spread / 2, 2),
+                        "ask": round(p + self.default_spread / 2, 2),
+                        "spread": self.default_spread,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "provider": "Gold-API Spot",
+                        "is_stale": False,
+                        "data_age_seconds": int(now - self._last_successful_fetch) if self._last_successful_fetch else 0,
+                        "is_market_open": self.is_market_open(),
+                    }
+                    self._price_cache = snapshot
+                    self._last_snapshot_time = now
+                    self._last_successful_fetch = now
+                    self._last_provider = "Gold-API Spot"
+                    self._consecutive_failures = 0
+                    return snapshot
         except Exception as e:
-            logger.warning(f"Gold-API fetch failed: {e}")
+            logger.debug(f"Gold-API fetch note: {e}")
 
-        # 3) Fallback to yfinance GC=F
+        # 3. yfinance Fallback
         for sym in self.GOLD_SYMBOLS:
             try:
                 ticker = yf.Ticker(sym)
-                price  = ticker.fast_info.last_price
-                if price and price > 0:
-                    logger.info(f"Gold price from {sym}: {price}")
-                    return round(float(price), 2)
+                price = ticker.fast_info.last_price
+                if price and float(price) > 0:
+                    p = round(float(price), 2)
+                    snapshot = {
+                        "price": p,
+                        "bid": round(p - self.default_spread / 2, 2),
+                        "ask": round(p + self.default_spread / 2, 2),
+                        "spread": self.default_spread,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "provider": f"yfinance ({sym})",
+                        "is_stale": False,
+                        "data_age_seconds": int(now - self._last_successful_fetch) if self._last_successful_fetch else 0,
+                        "is_market_open": self.is_market_open(),
+                    }
+                    self._price_cache = snapshot
+                    self._last_snapshot_time = now
+                    self._last_successful_fetch = now
+                    self._last_provider = f"yfinance ({sym})"
+                    self._consecutive_failures = 0
+                    return snapshot
             except Exception as e:
-                logger.warning(f"yfinance {sym} failed: {e}")
+                logger.debug(f"yfinance {sym} note: {e}")
 
-        return None
+        self._consecutive_failures += 1
+        age = int(now - self._last_successful_fetch) if self._last_successful_fetch else 999
+        return {
+            "price": self._price_cache.get("price", 0.0),
+            "bid": self._price_cache.get("bid", 0.0),
+            "ask": self._price_cache.get("ask", 0.0),
+            "spread": self.default_spread,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "provider": "STALE_FALLBACK",
+            "is_stale": True,
+            "data_age_seconds": age,
+            "is_market_open": self.is_market_open(),
+        }
+
+    def get_current_price(self) -> Optional[float]:
+        """Convenience method returning latest spot price"""
+        snap = self.get_market_snapshot()
+        p = snap.get("price")
+        return p if (p and p > 0) else None
 
     # ─────────────────────────────────────────────────────────
-    # OHLCV Historical Data
+    # OHLCV Multi-Timeframe Candle Data (M15, M5, M1)
     # ─────────────────────────────────────────────────────────
-    def get_ohlcv(self, timeframe: str = "1h", bars: int = 200) -> Optional[pd.DataFrame]:
+    def get_ohlcv(self, timeframe: str = "5m", bars: int = 150) -> Optional[pd.DataFrame]:
         """
-        OHLCV ক্যান্ডেল ডেটা ফেচ করে এবং Spot Gold (OANDA:XAUUSD) প্রাইসের সাথে সিঙ্ক করে
+        OHLCV candle data ingestion with timestamp normalization,
+        outlier filtering, and completed bar validation.
         """
         tf_map = {
-            "1m": "1m", "5m": "5m", "15m": "15m",
-            "30m": "30m", "1h": "60m", "4h": "60m",
-            "1d": "1d", "1w": "1wk",
+            "1m": "1m",
+            "5m": "5m",
+            "15m": "15m",
+            "60m": "60m",
+            "1h": "60m",
         }
-        yf_tf = tf_map.get(timeframe, "60m")
-
-        if yf_tf in ("1m",):
-            period = "7d"
-        elif yf_tf in ("5m", "15m", "30m", "60m"):
-            period = "60d"
-        else:
-            period = "2y"
+        yf_tf = tf_map.get(timeframe.lower(), "5m")
+        period = "5d" if yf_tf == "1m" else ("30d" if yf_tf in ("5m", "15m") else "60d")
 
         spot_price = self.get_current_price()
 
@@ -123,125 +195,59 @@ class MarketDataFetcher:
                 if df is not None and not df.empty:
                     df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
                     df = df.rename(columns=str.capitalize)
-                    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+                    df = df[["Open", "High", "Low", "Close"]].dropna()
 
-                    # Resample to 4H candles if requested
-                    if timeframe.lower() == "4h":
-                        df = df.resample("4h").agg({
-                            "Open": "first",
-                            "High": "max",
-                            "Low": "min",
-                            "Close": "last",
-                            "Volume": "sum",
-                        }).dropna()
+                    # Outlier filter: eliminates single erroneous spikes (> 8x median bar range)
+                    tr = (df["High"] - df["Low"]).abs()
+                    median_tr = tr.median()
+                    if median_tr > 0:
+                        outliers = tr > (median_tr * 8.0)
+                        if outliers.any():
+                            df.loc[outliers, "High"] = df.loc[outliers, "Open"] + (median_tr * 2.5)
+                            df.loc[outliers, "Low"] = df.loc[outliers, "Open"] - (median_tr * 2.5)
 
-                    df = df.tail(bars)
-
-                    # Align with Spot Price if using futures data
+                    # Normalize futures basis difference with spot price if needed
                     if spot_price and not df.empty:
                         last_close = df["Close"].iloc[-1]
                         diff = last_close - spot_price
-                        # If difference is more than 3 dollars, calibrate to spot
-                        if abs(diff) > 3.0:
+                        if abs(diff) > 2.0:
                             df["Open"]  = (df["Open"] - diff).round(2)
                             df["High"]  = (df["High"] - diff).round(2)
                             df["Low"]   = (df["Low"] - diff).round(2)
                             df["Close"] = (df["Close"] - diff).round(2)
 
-                    logger.info(f"OHLCV fetched & calibrated: {sym} {timeframe} — {len(df)} bars")
-                    return df
+                    return df.tail(bars)
             except Exception as e:
-                logger.warning(f"OHLCV fetch failed for {sym}/{timeframe}: {e}")
+                logger.warning(f"OHLCV fetch note for {sym}/{timeframe}: {e}")
 
         return None
 
-    # ─────────────────────────────────────────────────────────
-    # Correlated Assets
-    # ─────────────────────────────────────────────────────────
-    def get_correlated_assets(self) -> dict:
-        """
-        Gold-correlated assets ডেটা ফেচ করে (DXY, SPX, etc.)
-        Returns dict with last price and daily change %
-        """
-        result = {}
-        for name, sym in self.CORRELATED.items():
-            try:
-                t     = yf.Ticker(sym)
-                info  = t.fast_info
-                price = getattr(info, "last_price", None)
-                prev  = getattr(info, "previous_close", None)
-                if price and prev:
-                    chg = round(((price - prev) / prev) * 100, 2)
-                    result[name] = {"price": round(float(price), 4), "change_pct": chg}
-            except Exception as e:
-                logger.warning(f"Correlated asset {name} failed: {e}")
-
-        return result
-
-    # ─────────────────────────────────────────────────────────
-    # Market Status
-    # ─────────────────────────────────────────────────────────
     def is_market_open(self) -> bool:
-        """Gold futures market খোলা কি না চেক করে"""
+        """
+        Spot Gold operates Sunday 22:00 UTC to Friday 21:00 UTC.
+        Returns False during weekend shutdown.
+        """
         now = datetime.now(timezone.utc)
-        weekday = now.weekday()  # 0=Mon, 6=Sun
+        weekday = now.weekday()  # 0=Monday, 5=Saturday, 6=Sunday
 
-        # Gold trades Sunday 6PM – Friday 5PM ET (approx)
-        if weekday == 5:  # Saturday
+        if weekday == 5:  # Saturday full close
             return False
-
-        # Friday after 5PM ET (21:00 UTC) is closed
-        if weekday == 4 and now.hour >= 21:
+        if weekday == 4 and now.hour >= 21:  # Friday post-close
             return False
-
-        # Sunday before 6PM ET (22:00 UTC) is closed
-        if weekday == 6 and now.hour < 22:
+        if weekday == 6 and now.hour < 22:   # Sunday pre-open
             return False
 
         return True
 
-    # ─────────────────────────────────────────────────────────
-    # Key Levels (Support / Resistance)
-    # ─────────────────────────────────────────────────────────
-    def get_key_levels(self, df: pd.DataFrame, n: int = 5) -> dict:
-        """সাপোর্ট এবং রেজিস্ট্যান্স লেভেল বের করে"""
-        if df is None or df.empty:
-            return {"support": [], "resistance": []}
-
-        highs  = df["High"].values
-        lows   = df["Low"].values
-        closes = df["Close"].values
-
-        # Pivot Points based on completed candle
-        idx = -2 if len(highs) >= 2 else -1
-        last_high  = highs[idx]
-        last_low   = lows[idx]
-        last_close = closes[idx]
-
-        pivot = (last_high + last_low + last_close) / 3
-        r1    = 2 * pivot - last_low
-        r2    = pivot + (last_high - last_low)
-        r3    = last_high + 2 * (pivot - last_low)
-        s1    = 2 * pivot - last_high
-        s2    = pivot - (last_high - last_low)
-        s3    = last_low - 2 * (last_high - pivot)
-
-        # Recent swing highs/lows
-        window = 10
-        swing_highs = []
-        swing_lows  = []
-        for i in range(window, len(highs) - window):
-            if highs[i] == max(highs[i - window : i + window + 1]):
-                swing_highs.append(round(highs[i], 2))
-            if lows[i] == min(lows[i - window : i + window + 1]):
-                swing_lows.append(round(lows[i], 2))
-
-        cur_price = closes[-1]
-        all_res = sorted(set([round(r1, 2), round(r2, 2), round(r3, 2)] + swing_highs[-3:]))
-        all_sup = sorted(set([round(s1, 2), round(s2, 2), round(s3, 2)] + swing_lows[-3:]), reverse=True)
-
+    def get_health_status(self) -> Dict[str, Any]:
+        """Returns health diagnostics for market data engine"""
+        now = time.time()
+        age = int(now - self._last_successful_fetch) if self._last_successful_fetch else 999
+        is_healthy = age < 120 and self._consecutive_failures < 3
         return {
-            "pivot":      round(pivot, 2),
-            "resistance": all_res,
-            "support":    all_sup,
+            "status": "HEALTHY" if is_healthy else "DEGRADED",
+            "last_provider": self._last_provider,
+            "data_age_seconds": age,
+            "consecutive_failures": self._consecutive_failures,
+            "is_market_open": self.is_market_open(),
         }

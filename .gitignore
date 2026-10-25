@@ -2,7 +2,7 @@
 __pycache__/
 *.py[cod]
 logs/
-database/*.db
+database/*.db*
 .venv/
 venv/
 gh_bin/

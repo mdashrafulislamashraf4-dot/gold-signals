@@ -1,575 +1,204 @@
 """
 ============================================================
   modules/signal_engine.py
-  সিগনাল জেনারেশন এবং রিস্ক ম্যানেজমেন্ট ইঞ্জিন
+  Signal Orchestration & Institutional Execution Gatekeeper
+  Connects Setup Engines, Risk Guardian, Trade Manager & Telegram Bot
 ============================================================
 """
 
 import logging
-import sqlite3
+import uuid
 from datetime import datetime
-
+from typing import Dict, Any, Optional, List
 import pytz
 
-from config import TIMEZONE, RISK_PER_TRADE, DB_PATH
+from config import (
+    TIMEZONE,
+    OPERATING_MODE,
+    MAX_SIMULTANEOUS_POSITIONS,
+)
+from modules.database import DatabaseManager
+from modules.risk_engine import RiskEngine
+from modules.setup_engines import SetupEngines
+from modules.trade_manager import TradeManager
+from modules.telegram_bot import TelegramBot
 
 logger = logging.getLogger(__name__)
 
 
 class SignalEngine:
     """
-    টেকনিক্যাল (SMC) + নিউজ + AI স্কোর কম্বাইন করে
-    চূড়ান্ত ইনস্টিটিউশনাল ট্রেডিং সিগনাল ও রিস্ক ম্যানেজমেন্ট পরিচালনা করে
+    Coordinates setup discovery across the 3 independent engines, passes candidates
+    through the Risk Guardian, assigns sequential trade IDs, and directs trade management.
     """
 
-    # Weight configuration
-    WEIGHTS = {
-        "technical": 0.50,
-        "news":      0.25,
-        "ai":        0.25,
-    }
-
-    def __init__(self):
-        self._init_db()
-
-    def is_daily_loss_limit_reached(self, max_loss_pct: float = None) -> tuple:
-        """Daily loss limit disabled per user preference"""
-        return False, 0.0
-
-    # ─────────────────────────────────────────────────────────
-    # Database
-    # ─────────────────────────────────────────────────────────
-    def _init_db(self):
-        """SQLite database তৈরি করে"""
-        import os
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("PRAGMA journal_mode=WAL;")
-            conn.execute("PRAGMA synchronous=NORMAL;")
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS signals (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    daily_trade_num INTEGER DEFAULT 1,
-                    timestamp       TEXT    NOT NULL,
-                    direction       TEXT    NOT NULL,
-                    entry_price     REAL,
-                    tp1             REAL,
-                    tp2             REAL,
-                    tp3             REAL,
-                    sl              REAL,
-                    confidence      INTEGER,
-                    tech_score      INTEGER,
-                    news_score      INTEGER,
-                    timeframe       TEXT,
-                    status          TEXT DEFAULT 'ACTIVE',
-                    result          TEXT DEFAULT 'PENDING',
-                    tp_hit          INTEGER DEFAULT 0,
-                    sl_hit          INTEGER DEFAULT 0,
-                    close_price     REAL,
-                    pnl_pips        REAL,
-                    reasoning       TEXT,
-                    rr_ratio        TEXT
-                )
-            """)
-            try:
-                conn.execute("ALTER TABLE signals ADD COLUMN daily_trade_num INTEGER DEFAULT 1")
-            except Exception:
-                pass
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS news_alerts (
-                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    title     TEXT,
-                    source    TEXT,
-                    impact    TEXT,
-                    sent      INTEGER DEFAULT 0
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS evaluated_news (
-                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    title     TEXT UNIQUE,
-                    status    TEXT
-                )
-            """)
-            conn.commit()
-        logger.info("Database initialized")
-
-    # ─────────────────────────────────────────────────────────
-    # Generate Signal
-    # ─────────────────────────────────────────────────────────
-    def generate_signal(
+    def __init__(
         self,
-        technical_result: dict,
-        news_result:      dict,
-        ai_result:        dict,
-        current_price:    float,
-        timeframe:        str = "H1",
-    ) -> dict:
+        db_manager: Optional[DatabaseManager] = None,
+        risk_engine: Optional[RiskEngine] = None,
+        setup_engines: Optional[SetupEngines] = None,
+        telegram_bot: Optional[TelegramBot] = None,
+        trade_manager: Optional[TradeManager] = None,
+    ):
+        self.db = db_manager or DatabaseManager()
+        self.risk = risk_engine or RiskEngine(self.db)
+        self.engines = setup_engines or SetupEngines()
+        self.telegram = telegram_bot
+        self.trade_manager = trade_manager or TradeManager(self.db, self.risk)
+
+    def generate_and_dispatch(
+        self,
+        df_15m: Any,
+        df_5m: Any,
+        df_1m: Optional[Any],
+        current_price: float,
+        current_spread: float,
+        news_risk: bool = False,
+        news_event_name: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
-        ইনস্টিটিউশনাল মাস্টার স্ট্র্যাটেজি ও মাল্টি-টাইমফ্রেম ডেটা সমন্বয় করে চূড়ান্ত ট্রেডিং সিগনাল তৈরি করে
+        Evaluates the 3 setup engines, applies hard risk gates, assigns sequential trade ID,
+        records the signal in SQLite, and dispatches minimal Telegram alert.
         """
-        # ── 1. Check if Technical Result is from Master Strategy Pipeline ──
-        if "checklist_score" in technical_result:
-            master_dir = technical_result.get("direction", "NO_TRADE")
-            setup_type = technical_result.get("setup_type", "MASTER_SWING")
-            setup_title = technical_result.get("setup_title", "মাস্টার স্ট্র্যাটেজি")
-            ai_dir     = ai_result.get("direction", "NEUTRAL")
-            passed     = technical_result.get("passed_count", 0)
+        # 1. Enforce single open simulated trade rule
+        active_trades = self.db.get_active_signals()
+        if len(active_trades) >= MAX_SIMULTANEOUS_POSITIONS:
+            logger.debug(f"Position active (#{active_trades[0].get('trade_id')}). New setups skipped until trade closes.")
+            return None
 
-            # Strict "No Setup = No Trade"
-            if master_dir in ("BUY", "SELL"):
-                # If AI strongly opposes (e.g. Technical BUY but AI says SELL with >75% conf), caution
-                if (master_dir == "BUY" and ai_dir == "SELL" and ai_result.get("confidence", 0) >= 75) or \
-                   (master_dir == "SELL" and ai_dir == "BUY" and ai_result.get("confidence", 0) >= 75):
-                    direction = "WAIT"
-                    confidence = 55
-                    reasoning = ["⚠️ টেকনিক্যাল সেটআপ তৈরি হলেও AI ম্যাক্রো ভিউ বিপরীত — নিশ্চিত হতে অপেক্ষা করুন।"]
-                else:
-                    direction = master_dir
-                    if setup_type == "SCALP":
-                        base_conf = 72 + min(passed * 2, 16)
-                    else:
-                        base_conf = 75 + min(passed * 2, 18)
-
-                    if ai_dir == master_dir:
-                        base_conf += 4
-                    confidence = min(int(base_conf), 95)
-                    reasoning = technical_result.get("reasoning", [])
-            else:
-                direction = master_dir  # "NO_TRADE" or "WAIT"
-                confidence = 50
-                reasoning = technical_result.get("reasoning", [])
-
-            entry = technical_result.get("entry", current_price)
-            tp1   = technical_result.get("tp1", current_price)
-            tp2   = technical_result.get("tp2", current_price)
-            tp3   = technical_result.get("tp3", current_price)
-            sl    = technical_result.get("sl", current_price)
-            rr_str = technical_result.get("rr_ratio", "1:2.0")
-
-            # Lot size calculation (Assuming $1,000 standard balance and 0.5% risk)
-            if direction in ("BUY", "SELL") and sl != entry:
-                sl_distance = abs(entry - sl)
-                risk_usd = 1000.0 * (RISK_PER_TRADE / 100.0)
-                lot = round(risk_usd / max(sl_distance * 100.0, 10.0), 2)
-                suggested_lot = max(lot, 0.01)
-            else:
-                suggested_lot = 0.0
-
-            timeframe_str = "15m-5m (Scalp)" if setup_type == "SCALP" else "4H-1H-15m-5m (Intraday)"
-            validity_str  = "১-৩ ঘণ্টা (কুইক স্ক্যাল্প)" if setup_type == "SCALP" else "৪-৮ ঘণ্টা (ইনস্টিটিউশনাল সুইং)"
-
-            signal = {
-                "direction":        direction,
-                "setup_type":       setup_type,
-                "setup_title":      setup_title,
-                "entry":            round(entry, 2),
-                "tp1":              round(tp1, 2),
-                "tp2":              round(tp2, 2),
-                "tp3":              round(tp3, 2),
-                "sl":               round(sl, 2),
-                "confidence":       confidence,
-                "combined_score":   confidence,
-                "tech_score":       int(min(passed / 12.0 * 100, 100)),
-                "news_score":       news_result.get("score", 50),
-                "ai_score":         ai_result.get("confidence", 60),
-                "rr_ratio":         rr_str,
-                "timeframe":        timeframe_str,
-                "risk_level":       "নিয়ন্ত্রিত ঝুঁকি (Strict 0.5% Risk)",
-                "validity":         validity_str,
-                "reasoning":        reasoning,
-                "warnings":         ai_result.get("warnings", []),
-                "patterns":         technical_result.get("active_fvgs", []),
-                "risk_per_trade":   RISK_PER_TRADE,
-                "suggested_lot":    suggested_lot,
-                "checklist_score":  technical_result.get("checklist_score", "0/12"),
-                "checklist":        technical_result.get("checklist", []),
-                "liquidity":        technical_result.get("liquidity", {}),
-                "sweep":            technical_result.get("sweep", {}),
-                "dealing_range":    technical_result.get("dealing_range", {}),
-                "rvol":             technical_result.get("rvol", 1.0),
-                "session_info":     technical_result.get("liquidity", {}).get("current_session", "সার্বক্ষণিক"),
-                "timestamp":        datetime.now(pytz.timezone(TIMEZONE)).isoformat(),
-            }
-            return signal
-
-        # ── 2. Fallback Standard Scoring (Backward Compatibility) ──
-        tech_score = technical_result.get("score", 50)
-        news_score = news_result.get("score", 50)
-        ai_conf    = ai_result.get("confidence", 60)
-
-        ai_dir = ai_result.get("direction", "NEUTRAL")
-        if ai_dir == "BUY":
-            ai_score = 50 + (ai_conf / 2)
-        elif ai_dir == "SELL":
-            ai_score = 50 - (ai_conf / 2)
-        else:
-            ai_score = 50
-
-        combined_score = (
-            tech_score * self.WEIGHTS["technical"] +
-            news_score * self.WEIGHTS["news"] +
-            ai_score   * self.WEIGHTS["ai"]
+        # 2. Evaluate all 3 setup engines
+        setup = self.engines.evaluate_all_setups(
+            df_15m=df_15m,
+            df_5m=df_5m,
+            df_1m=df_1m,
+            current_price=current_price,
+            current_spread=current_spread,
         )
 
-        if combined_score >= 65:
-            direction = "BUY"
-        elif combined_score <= 35:
-            direction = "SELL"
-        else:
-            direction = "NEUTRAL"
+        if not setup.get("valid") or setup.get("direction") not in ("BUY", "SELL"):
+            logger.debug(f"No trade setup triggered: {setup.get('reason')}")
+            return None
 
-        entry = ai_result.get("entry", current_price) or current_price
-        tp1   = ai_result.get("tp1", 0)
-        tp2   = ai_result.get("tp2", 0)
-        tp3   = ai_result.get("tp3", 0)
-        sl    = ai_result.get("sl",  0)
+        direction = setup["direction"]
+        entry     = setup["entry"]
+        sl        = setup["sl"]
+        tp1       = setup["tp1"]
+        tp2       = setup["tp2"]
+        risk_dist = abs(entry - sl)
 
-        atr = technical_result.get("details", {}).get("ATR", 15)
-        if atr is None or atr == 0:
-            atr = 15
+        # 3. Risk Guardian Approval Gate
+        latest_candle_time = df_5m.index[-1] if hasattr(df_5m, "index") and len(df_5m) > 0 else None
+        atr_val = getattr(setup, "atr", 2.50)
 
-        if tp1 == 0 or tp1 == current_price:
-            if direction == "BUY":
-                tp1 = round(current_price + atr * 1.5, 2)
-                tp2 = round(current_price + atr * 3.0, 2)
-                tp3 = round(current_price + atr * 5.0, 2)
-                sl  = round(current_price - atr * 1.2, 2)
-            elif direction == "SELL":
-                tp1 = round(current_price - atr * 1.5, 2)
-                tp2 = round(current_price - atr * 3.0, 2)
-                tp3 = round(current_price - atr * 5.0, 2)
-                sl  = round(current_price + atr * 1.2, 2)
-            else:
-                tp1 = tp2 = tp3 = current_price
-                sl  = current_price
-
-        if direction in ("BUY", "SELL") and sl != 0 and tp2 != 0:
-            risk   = abs(entry - sl)
-            reward = abs(tp2 - entry)
-            rr     = round(reward / risk, 1) if risk > 0 else 0
-            rr_str = f"1:{rr}"
-        else:
-            rr_str = ai_result.get("rr_ratio", "1:2")
-
-        confidence = int(min(abs(combined_score - 50) * 2 + 40, 95))
-        reasoning = (
-            ai_result.get("reasoning", []) or
-            technical_result.get("buy_signals", [])[:3] or
-            technical_result.get("sell_signals", [])[:3]
+        risk_approval = self.risk.evaluate_trade_approval(
+            current_spread=current_spread,
+            current_atr=atr_val,
+            avg_atr=atr_val,
+            latest_candle_time=latest_candle_time,
+            is_news_blackout=news_risk,
+            news_event_name=news_event_name,
         )
 
-        signal = {
-            "direction":    direction,
-            "entry":        round(entry, 2),
-            "tp1":          round(tp1, 2),
-            "tp2":          round(tp2, 2),
-            "tp3":          round(tp3, 2),
-            "sl":           round(sl, 2),
-            "confidence":   confidence,
-            "combined_score": round(combined_score, 1),
-            "tech_score":   tech_score,
-            "news_score":   news_score,
-            "ai_score":     round(ai_score, 1),
-            "rr_ratio":     rr_str,
-            "timeframe":    timeframe,
-            "risk_level":   ai_result.get("risk_level", "মাঝারি (Medium)"),
-            "validity":     ai_result.get("validity", "৪-৮ ঘণ্টা"),
-            "reasoning":    reasoning,
-            "warnings":     ai_result.get("warnings", []),
-            "patterns":     technical_result.get("patterns", []),
-            "risk_per_trade": RISK_PER_TRADE,
-            "timestamp":    datetime.now(pytz.timezone(TIMEZONE)).isoformat(),
+        if not risk_approval["approved"]:
+            logger.info(f"Setup rejected by Risk Guardian: {risk_approval['reason']} - {risk_approval['details']}")
+            return None
+
+        # 4. Position Sizing
+        paper_acc = self.db.get_paper_account()
+        equity = paper_acc.get("equity", 10000.0)
+        sizing = self.risk.calculate_position_size(equity, risk_dist)
+
+        if not sizing["valid"]:
+            logger.info(f"Setup rejected by Position Sizer: {sizing['reason']}")
+            return None
+
+        # 5. Acquire Atomic Sequential Trade ID
+        trade_id = self.db.get_next_trade_id()
+        now_iso = datetime.now(pytz.timezone(TIMEZONE)).isoformat()
+
+        signal_payload = {
+            "trade_id": trade_id,
+            "signal_uuid": f"XAU-{trade_id:04d}-{str(uuid.uuid4())[:6].upper()}",
+            "timestamp": now_iso,
+            "mode": OPERATING_MODE,
+            "direction": direction,
+            "entry": entry,
+            "tp1": tp1,
+            "tp2": tp2,
+            "sl": sl,
+            "risk_pct": sizing["risk_pct"],
+            "suggested_lot": sizing["lot"],
+            "spread": current_spread,
+            "setup_engine": setup.get("engine_name", "Unknown"),
+            "target_basis": setup.get("target_basis", ""),
+            "sl_reason": setup.get("sl_reason", ""),
+            "reasoning": setup.get("reasoning", ""),
         }
 
-        # Return calculated signal (only saved to DB when dispatched to Telegram)
-        return signal
+        # 6. Save in SQLite
+        db_sig_id = self.db.save_signal(signal_payload)
+        signal_payload["id"] = db_sig_id
 
-    # ─────────────────────────────────────────────────────────
-    # Save & Update Signals in DB
-    # ─────────────────────────────────────────────────────────
-    def save_signal(self, signal: dict) -> int:
-        """সিগনাল টেলিগ্রামে পাঠানোর পর ডেটাবেসে ACTIVE হিসেবে সেভ করে (আজকের দিনের ট্রেড নম্বর সহ)"""
-        try:
-            tz = pytz.timezone(TIMEZONE)
-            today_str = datetime.now(tz).strftime("%Y-%m-%d")
+        logger.info(
+            f"⚡ NEW SIGNAL #{trade_id:03d} [{signal_payload['setup_engine']}]: "
+            f"{direction} @ {entry} | TP1: {tp1} | TP2: {tp2} | SL: {sl} | Lot: {sizing['lot']}"
+        )
 
-            with sqlite3.connect(DB_PATH) as conn:
-                cur = conn.cursor()
-                row = cur.execute("SELECT COUNT(*) FROM signals WHERE timestamp LIKE ?", (f"{today_str}%",)).fetchone()
-                daily_num = (row[0] if row else 0) + 1
-                signal["daily_trade_num"] = daily_num
+        # 7. Dispatch Minimal Telegram Message
+        if self.telegram and OPERATING_MODE in ("PAPER", "TELEGRAM_SIGNAL", "LIVE"):
+            self.telegram.send_signal(signal_payload)
 
-                cur.execute("""
-                    INSERT INTO signals
-                    (daily_trade_num, timestamp, direction, entry_price, tp1, tp2, tp3, sl,
-                     confidence, tech_score, news_score, timeframe, status, result,
-                     tp_hit, sl_hit, reasoning, rr_ratio)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'ACTIVE', 'PENDING', 0, 0, ?,?)
-                """, (
-                    daily_num,
-                    signal["timestamp"],
-                    signal["direction"],
-                    signal["entry"],
-                    signal["tp1"],
-                    signal["tp2"],
-                    signal["tp3"],
-                    signal["sl"],
-                    signal["confidence"],
-                    signal["tech_score"],
-                    signal["news_score"],
-                    signal["timeframe"],
-                    str(signal.get("reasoning", [])),
-                    signal["rr_ratio"],
-                ))
-                conn.commit()
-                return cur.lastrowid
-        except Exception as e:
-            logger.error(f"DB save error: {e}")
-            return -1
+        return signal_payload
 
-    def get_active_signals(self) -> list:
-        """চালু থাকা সব ACTIVE সিগনাল বের করে"""
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute("""
-                    SELECT * FROM signals WHERE status='ACTIVE' ORDER BY id DESC
-                """).fetchall()
-            return [dict(r) for r in rows]
-        except Exception as e:
-            logger.error(f"DB get active signals error: {e}")
-            return []
-
-    def mark_tp1_hit(self, signal_id: int, current_price: float, breakeven_sl: float):
-        """TP1 হিট হলে আপডেট করে এবং স্টপ লস (SL) এন্ট্রি প্রাইসে (Breakeven) স্থানান্তর করে। ট্রেড ACTIVE থাকে TP2-এর জন্য।"""
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.execute("""
-                    UPDATE signals
-                    SET tp_hit=1, close_price=?, sl=?, result='TP1_HIT'
-                    WHERE id=?
-                """, (current_price, breakeven_sl, signal_id))
-                conn.commit()
-            logger.info(f"Signal #{signal_id} TP1 marked at {current_price}, SL moved to breakeven {breakeven_sl}")
-        except Exception as e:
-            logger.error(f"DB TP1 update error: {e}")
-
-    def close_signal(self, signal_id: int, result: str, close_price: float, tp_hit: int = 0, sl_hit: int = 0):
-        """সিগনাল সম্পন্ন হলে বা বন্ধ হলে স্ট্যাটাস CLOSED করে এবং PnL হিসাব করে"""
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.row_factory = sqlite3.Row
-                row = conn.execute("SELECT direction, entry_price FROM signals WHERE id=?", (signal_id,)).fetchone()
-                pnl_pips = 0.0
-                if row:
-                    entry = row["entry_price"] or close_price
-                    direction = row["direction"]
-                    diff = (close_price - entry) if direction == "BUY" else (entry - close_price)
-                    pnl_pips = round(diff * 10, 1)  # 1 USD move = 10 pips in XAUUSD
-
-                conn.execute("""
-                    UPDATE signals
-                    SET result=?, close_price=?, tp_hit=?, sl_hit=?, pnl_pips=?, status='CLOSED'
-                    WHERE id=?
-                """, (result, close_price, tp_hit, sl_hit, pnl_pips, signal_id))
-                conn.commit()
-            logger.info(f"Signal #{signal_id} CLOSED with result: {result} at {close_price} (PnL: {pnl_pips} pips)")
-        except Exception as e:
-            logger.error(f"DB close signal error: {e}")
-
-    def update_signal_result(self, signal_id: int, result: str, close_price: float, tp_hit: int = 0, sl_hit: int = 0):
-        """Backward compatibility wrapper for close_signal"""
-        self.close_signal(signal_id, result, close_price, tp_hit, sl_hit)
-
-    def cleanup_ghost_signals(self, max_hours: int = 12):
-        """পূর্বে জমে থাকা ১২ ঘণ্টার বেশি পুরনো সক্রিয় সিগনাল স্বয়ংক্রিয়ভাবে বন্ধ করে (রিসেন্ট ট্রেড সুরক্ষিত রাখে)"""
-        try:
-            tz = pytz.timezone(TIMEZONE)
-            now = datetime.now(tz)
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute("SELECT id, timestamp FROM signals WHERE status='ACTIVE'").fetchall()
-                expired = 0
-                for r in rows:
-                    try:
-                        sig_time = datetime.fromisoformat(r["timestamp"])
-                        if (now - sig_time).total_seconds() > max_hours * 3600:
-                            conn.execute("UPDATE signals SET status='CLOSED', result='EXPIRED' WHERE id=?", (r["id"],))
-                            expired += 1
-                    except Exception:
-                        pass
-                conn.commit()
-            if expired > 0:
-                logger.info(f"Cleaned up {expired} expired active signals (> {max_hours}h old)")
-        except Exception as e:
-            logger.error(f"Cleanup ghost signals error: {e}")
-
-    # ─────────────────────────────────────────────────────────
-    # Performance Stats
-    # ─────────────────────────────────────────────────────────
-    def get_daily_stats(self) -> dict:
-        """আজকের সিগনাল পারফরম্যান্স বের করে"""
-        try:
-            tz    = pytz.timezone(TIMEZONE)
-            today = datetime.now(tz).strftime("%Y-%m-%d")
-
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute("""
-                    SELECT * FROM signals
-                    WHERE timestamp LIKE ?
-                    ORDER BY timestamp DESC
-                """, (f"{today}%",)).fetchall()
-
-            signals = [dict(r) for r in rows]
-            tp_hits = sum(1 for s in signals if s.get("tp_hit", 0) > 0)
-            sl_hits = sum(1 for s in signals if s.get("sl_hit", 0) > 0)
-            pending = sum(1 for s in signals if s.get("status") == "ACTIVE")
-
-            total_closed = tp_hits + sl_hits
-            win_rate = (tp_hits / total_closed * 100) if total_closed > 0 else 0
-
-            return {
-                "date":      today,
-                "total":     len(signals),
-                "tp_hits":   tp_hits,
-                "sl_hits":   sl_hits,
-                "pending":   pending,
-                "win_rate":  round(win_rate, 1),
-                "signals":   signals,
-            }
-        except Exception as e:
-            logger.error(f"Daily stats error: {e}")
-            return {"total": 0, "tp_hits": 0, "sl_hits": 0, "win_rate": 0, "signals": []}
-
-    def get_weekly_stats(self) -> dict:
-        """এই সপ্তাহের সিগনাল পারফরম্যান্স বের করে"""
-        try:
-            tz      = pytz.timezone(TIMEZONE)
-            now     = datetime.now(tz)
-            # Monday of this week
-            monday  = now - __import__("datetime").timedelta(days=now.weekday())
-            from_dt = monday.strftime("%Y-%m-%d")
-
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute("""
-                    SELECT * FROM signals
-                    WHERE timestamp >= ?
-                    ORDER BY timestamp DESC
-                """, (from_dt,)).fetchall()
-
-            signals  = [dict(r) for r in rows]
-            tp_hits  = sum(1 for s in signals if s.get("tp_hit", 0) > 0)
-            sl_hits  = sum(1 for s in signals if s.get("sl_hit", 0) > 0)
-            total_cl = tp_hits + sl_hits
-            win_rate = (tp_hits / total_cl * 100) if total_cl > 0 else 0
-
-            buys  = sum(1 for s in signals if s.get("direction") == "BUY")
-            sells = sum(1 for s in signals if s.get("direction") == "SELL")
-
-            return {
-                "from_date": from_dt,
-                "total":     len(signals),
-                "buys":      buys,
-                "sells":     sells,
-                "tp_hits":   tp_hits,
-                "sl_hits":   sl_hits,
-                "win_rate":  round(win_rate, 1),
-                "signals":   signals[:20],
-            }
-        except Exception as e:
-            logger.error(f"Weekly stats error: {e}")
-            return {"total": 0, "tp_hits": 0, "sl_hits": 0, "win_rate": 0}
-
-    # ─────────────────────────────────────────────────────────
-    # Active Signal Monitoring
-    # ─────────────────────────────────────────────────────────
-    def check_active_signals(self, current_price: float) -> list:
+    def monitor_active_trades(
+        self,
+        current_price: float,
+        current_spread: float,
+        df_1m: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
         """
-        চালু সিগনালগুলো চেক করে TP/SL হিট হয়েছে কি না।
-        TP1 একবার হিট হলে স্টপ লস Breakeven-এ নেওয়া হয় এবং আর TP1 এলার্ট দেওয়া হয় না।
+        Monitors active trades for TP1, TP2, and SL events.
+        Dispatches minimal Telegram trade result messages when hit.
         """
-        alerts = []
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute("""
-                    SELECT * FROM signals WHERE status='ACTIVE'
-                """).fetchall()
+        events = self.trade_manager.process_open_trades(
+            current_price=current_price,
+            current_spread=current_spread,
+            df_1m=df_1m,
+        )
 
-            tz = pytz.timezone(TIMEZONE)
-            now = datetime.now(tz)
+        for ev in events:
+            ev_type  = ev["event"]
+            trade_id = ev["trade_id"]
 
-            for row in rows:
-                s   = dict(row)
-                sid = s["id"]
-                dir = s["direction"]
-                entry = s.get("entry_price", 0)
-                tp1, tp2, tp3, sl = s.get("tp1", 0), s.get("tp2", 0), s.get("tp3", 0), s.get("sl", 0)
-                tp_hit = s.get("tp_hit", 0)
+            if ev_type == "TP1_HIT":
+                logger.info(f"✅ Trade #{trade_id:03d} reached TP1 at {ev.get('exit_price')}. Moving SL to BE.")
+                if self.telegram:
+                    self.telegram.send_tp1_hit(trade_id)
 
-                # Timeout check: Auto-close signals older than 12 hours
-                try:
-                    sig_time = datetime.fromisoformat(s["timestamp"])
-                    if (now - sig_time).total_seconds() > 12 * 3600:
-                        logger.info(f"Signal #{sid} timed out after 12h — closing")
-                        self.close_signal(sid, result="TIMEOUT", close_price=current_price, tp_hit=tp_hit)
-                        continue
-                except Exception:
-                    pass
+            elif ev_type == "TP2_HIT":
+                logger.info(f"🏆 Trade #{trade_id:03d} reached TP2 at {ev.get('exit_price')}. Trade closed.")
+                if self.telegram:
+                    self.telegram.send_tp2_hit(trade_id)
 
-                if dir == "BUY":
-                    # TP3 check
-                    if tp3 and current_price >= tp3:
-                        self.close_signal(sid, result="TP3_HIT", close_price=current_price, tp_hit=3)
-                        alerts.append({"type": "TP3", "signal": s, "price": current_price})
-                    # TP2 check
-                    elif tp2 and current_price >= tp2 and tp_hit < 2:
-                        self.close_signal(sid, result="TP2_HIT", close_price=current_price, tp_hit=2)
-                        alerts.append({"type": "TP2", "signal": s, "price": current_price})
-                    # TP1 check (only once if tp_hit < 1)
-                    elif tp1 and current_price >= tp1 and tp_hit < 1:
-                        be_sl = round(entry + 0.30, 2)  # Spread buffer to protect profits
-                        self.mark_tp1_hit(sid, current_price, breakeven_sl=be_sl)
-                        alerts.append({"type": "TP1", "signal": s, "price": current_price})
-                    # Stop loss check
-                    elif sl and current_price <= sl:
-                        if tp_hit >= 1:
-                            self.close_signal(sid, result="BREAKEVEN_CLOSED", close_price=current_price, tp_hit=tp_hit)
-                            alerts.append({"type": "BREAKEVEN", "signal": s, "price": current_price})
-                        else:
-                            self.close_signal(sid, result="SL_HIT", close_price=current_price, sl_hit=1)
-                            alerts.append({"type": "SL", "signal": s, "price": current_price})
+            elif ev_type == "SL_HIT":
+                logger.info(f"❌ Trade #{trade_id:03d} hit Stop Loss at {ev.get('exit_price')}. Trade closed.")
+                if self.telegram:
+                    self.telegram.send_sl_hit(trade_id)
 
-                elif dir == "SELL":
-                    # TP3 check
-                    if tp3 and current_price <= tp3:
-                        self.close_signal(sid, result="TP3_HIT", close_price=current_price, tp_hit=3)
-                        alerts.append({"type": "TP3", "signal": s, "price": current_price})
-                    # TP2 check
-                    elif tp2 and current_price <= tp2 and tp_hit < 2:
-                        self.close_signal(sid, result="TP2_HIT", close_price=current_price, tp_hit=2)
-                        alerts.append({"type": "TP2", "signal": s, "price": current_price})
-                    # TP1 check (only once if tp_hit < 1)
-                    elif tp1 and current_price <= tp1 and tp_hit < 1:
-                        be_sl = round(entry - 0.30, 2)  # Spread buffer to protect profits
-                        self.mark_tp1_hit(sid, current_price, breakeven_sl=be_sl)
-                        alerts.append({"type": "TP1", "signal": s, "price": current_price})
-                    # Stop loss check
-                    elif sl and current_price >= sl:
-                        if tp_hit >= 1:
-                            self.close_signal(sid, result="BREAKEVEN_CLOSED", close_price=current_price, tp_hit=tp_hit)
-                            alerts.append({"type": "BREAKEVEN", "signal": s, "price": current_price})
-                        else:
-                            self.close_signal(sid, result="SL_HIT", close_price=current_price, sl_hit=1)
-                            alerts.append({"type": "SL", "signal": s, "price": current_price})
+        return events
 
-        except Exception as e:
-            logger.error(f"Signal monitoring error: {e}", exc_info=True)
+    def cleanup_ghost_signals(self):
+        """Cleans orphaned active signals on startup"""
+        self.db.cleanup_ghost_signals()
 
-        return alerts
+    def get_active_signals(self) -> List[Dict[str, Any]]:
+        """Returns all currently active and pending signals"""
+        return self.db.get_active_signals()
+
+    def save_signal(self, signal: Dict[str, Any]) -> int:
+        """Saves a signal to the database"""
+        return self.db.save_signal(signal)
+
+    def get_daily_stats(self) -> Dict[str, Any]:
+        """Returns daily trading statistics"""
+        return self.db.get_daily_stats()

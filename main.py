@@ -1,8 +1,9 @@
 """
 ============================================================
   main.py
-  AI GOLD SIGNAL SYSTEM — Main Entry Point
-  চালু করতে: python main.py
+  Gold QuickScalp AI — Adaptive TP/SL Scalping Engine
+  Commander A Specification — XAUUSD Only
+  Run: python main.py
 ============================================================
 """
 
@@ -10,12 +11,12 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from datetime import datetime
-
 import pytz
 
-# ── Setup logging ──────────────────────────────────────────
+# ── Logging Configuration ──────────────────────────────────
 os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -23,194 +24,216 @@ logging.basicConfig(
     handlers=[
         logging.StreamHandler(sys.stdout),
         logging.FileHandler(
-            f"logs/gold_signals_{datetime.now().strftime('%Y%m%d')}.log",
+            f"logs/gold_quickscalp_{datetime.now().strftime('%Y%m%d')}.log",
             encoding="utf-8",
         ),
     ],
 )
 logger = logging.getLogger("main")
 
-# ── Import modules ─────────────────────────────────────────
+# ── Module Imports ─────────────────────────────────────────
 from config import (
-    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_IDS,
-    GEMINI_API_KEY, NEWS_API_KEY,
-    TIMEZONE, SIGNAL_CHECK_INTERVAL,
+    OPERATING_MODE,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_IDS,
+    GEMINI_API_KEY,
+    NEWS_API_KEY,
+    TIMEZONE,
+    SIGNAL_CHECK_INTERVAL,
+    RISK_PER_TRADE,
+    MAX_RISK_PER_TRADE,
+    MAX_DAILY_LOSS_PCT,
+    MAX_CONSECUTIVE_LOSSES,
+    LIVE_EXECUTION_AUTHORIZED,
 )
+from modules.database        import DatabaseManager
+from modules.risk_engine     import RiskEngine
+from modules.trade_manager   import TradeManager
+from modules.setup_engines   import SetupEngines
 from modules.market_data     import MarketDataFetcher
-from modules.technical       import TechnicalAnalyzer
 from modules.news_analyzer   import NewsAnalyzer
 from modules.ai_analyzer     import AIAnalyzer
-from modules.signal_engine   import SignalEngine
 from modules.telegram_bot    import TelegramBot
+from modules.signal_engine   import SignalEngine
 from modules.scheduler       import TaskScheduler
 from modules.command_handler import CommandHandler
-import threading
-from flask import Flask
 
-web_app = Flask(__name__)
+# Optional Flask web server
+try:
+    from dashboard.routes import dashboard_bp, init_dashboard_context
+    from flask import Flask
+    web_app = Flask(__name__, template_folder="dashboard/templates")
+    web_app.register_blueprint(dashboard_bp)
+    HAS_DASHBOARD = True
+except Exception as e:
+    logger.debug(f"Dashboard routes note: {e}")
+    HAS_DASHBOARD = False
 
-@web_app.route('/')
-def home():
-    return "AI Gold Signal System is RUNNING 24/7!"
 
 def start_web_server():
+    """Runs optional local diagnostic dashboard"""
+    if not HAS_DASHBOARD:
+        return
     port = int(os.environ.get("PORT", 8080))
     import logging as py_logging
-    py_logging.getLogger('werkzeug').setLevel(py_logging.ERROR)
+    py_logging.getLogger("werkzeug").setLevel(py_logging.ERROR)
     try:
+        logger.info(f"🌐 Web Dashboard running on http://localhost:{port}")
         web_app.run(host="0.0.0.0", port=port, use_reloader=False)
     except Exception as e:
         logger.warning(f"Web server warning: {e}")
 
 
 def validate_config():
-    """কনফিগারেশন ভেলিডেট করে"""
+    """Validates required credentials according to operating mode"""
     errors = []
-    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
-        errors.append("❌ TELEGRAM_BOT_TOKEN is not set in .env file")
-    if not TELEGRAM_CHAT_IDS:
-        errors.append("❌ TELEGRAM_CHAT_ID is not set in .env file")
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "YOUR_GEMINI_API_KEY_HERE":
-        logger.warning("⚠️  GEMINI_API_KEY not set — using fallback analysis")
-    if not NEWS_API_KEY or NEWS_API_KEY == "YOUR_NEWS_API_KEY_HERE":
-        logger.warning("⚠️  NEWS_API_KEY not set — using free RSS feeds only")
+    if OPERATING_MODE in ("TELEGRAM_SIGNAL", "PAPER", "LIVE"):
+        if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
+            logger.warning("⚠️  TELEGRAM_BOT_TOKEN not configured in .env (Telegram signals will be skipped)")
+        if not TELEGRAM_CHAT_IDS or TELEGRAM_CHAT_IDS == ["YOUR_CHAT_ID_HERE"]:
+            logger.warning("⚠️  TELEGRAM_CHAT_ID not configured in .env")
     return errors
 
 
 def print_banner():
-    """স্টার্টআপ ব্যানার প্রিন্ট করে"""
-    banner = """
+    """Prints startup configuration summary"""
+    banner = f"""
 ╔══════════════════════════════════════════════════════════════╗
-║                                                              ║
-║     🏆  AI GOLD (XAUUSD) SIGNAL SYSTEM  🏆                  ║
-║                                                              ║
-║     📊 Technical Analysis  +  🤖 AI (Gemini)                ║
-║     📰 News Sentiment      +  📈 Multi-Timeframe            ║
-║     📱 Telegram Bot        +  💾 SQLite Database            ║
-║                                                              ║
-║     ⚡ Monitoring XAUUSD 24/7 for profit opportunities      ║
-║                                                              ║
+║              GOLD QUICKSCALP AI — COMMANDER A                ║
+║           Adaptive TP/SL XAUUSD Continuous Scalper           ║
+╠══════════════════════════════════════════════════════════════╣
+║  Instrument:   XAUUSD (Gold CFD Only)                        ║
+║  Timeframes:   M15 (Trend) | M5 (Setup) | M1 (Confirmation)  ║
+║  Engines:      1. Liquidity Sweep + BOS                      ║
+║                2. Trend Pullback + EMA 20/50 Retest          ║
+║                3. Range Breakout + Retest                    ║
+║  Mode:         {OPERATING_MODE:<45} ║
+║  Live Orders:  DISABLED BY DEFAULT (Safety Locked)           ║
+║  Risk / Trade: {RISK_PER_TRADE}% of equity (Max {MAX_RISK_PER_TRADE}%)                   ║
+║  DD Stop:      {MAX_DAILY_LOSS_PCT}% Daily Drawdown Ceiling                  ║
+║  Monitoring:   24/7 Continuous (Session Restrictions: None)  ║
 ╚══════════════════════════════════════════════════════════════╝
 """
     print(banner)
 
 
 def main():
-    """মেইন ফাংশন — সব মডিউল শুরু করে"""
+    """Main system orchestrator"""
     print_banner()
 
-    # ── Validate Config ────────────────────────────────────
-    errors = validate_config()
-    if errors:
-        for e in errors:
-            logger.error(e)
-        logger.error("\n❌ Please fix the above errors in your .env file")
-        logger.error("📖 See .env.example for reference")
-        sys.exit(1)
+    validate_config()
+    logger.info("Initializing Gold QuickScalp AI components...")
 
-    logger.info("✅ Configuration validated")
-    logger.info(f"🕐 Timezone: {TIMEZONE}")
-    logger.info(f"📊 Signal check interval: {SIGNAL_CHECK_INTERVAL} minutes")
-    logger.info(f"📱 Telegram Chat IDs: {TELEGRAM_CHAT_IDS}")
+    # 1. Database & State Recovery
+    db_manager = DatabaseManager()
+    logger.info(f"SQLite Database verified (Counter: #{db_manager.get_current_trade_counter():03d})")
 
-    # ── Initialize Modules ─────────────────────────────────
-    logger.info("🔧 Initializing modules...")
+    # 2. Risk Guardian
+    risk_engine = RiskEngine(db_manager)
 
-    market_data   = MarketDataFetcher()
-    technical     = TechnicalAnalyzer()
+    # 3. Trade Lifecycle Manager
+    trade_manager = TradeManager(db_manager, risk_engine)
+
+    # 4. Market Data Ingestion
+    market_data = MarketDataFetcher()
+
+    # 5. Setup Engines (3 Independent Engines)
+    setup_engines = SetupEngines()
+
+    # 6. Telegram Bot Interface
+    telegram_bot = TelegramBot(token=TELEGRAM_BOT_TOKEN, chat_ids=TELEGRAM_CHAT_IDS)
+
+    # 7. Signal Engine
+    signal_engine = SignalEngine(
+        db_manager=db_manager,
+        risk_engine=risk_engine,
+        setup_engines=setup_engines,
+        telegram_bot=telegram_bot,
+        trade_manager=trade_manager,
+    )
+    signal_engine.cleanup_ghost_signals()
+
+    # 8. External News & AI Context
     news_analyzer = NewsAnalyzer()
     ai_analyzer   = AIAnalyzer(api_key=GEMINI_API_KEY)
-    signal_engine = SignalEngine()
-    signal_engine.cleanup_ghost_signals()
-    telegram_bot  = TelegramBot(token=TELEGRAM_BOT_TOKEN, chat_ids=TELEGRAM_CHAT_IDS)
 
-    logger.info("✅ All modules initialized (Ghost signals cleaned up)")
+    # 9. Dashboard Context (if available)
+    if HAS_DASHBOARD:
+        try:
+            init_dashboard_context(
+                market_data=market_data,
+                technical=setup_engines,
+                news_analyzer=news_analyzer,
+                signal_engine=signal_engine,
+                trade_manager=trade_manager,
+                db_manager=db_manager,
+                risk_engine=risk_engine,
+            )
+            threading.Thread(target=start_web_server, daemon=True).start()
+        except Exception as e:
+            logger.debug(f"Dashboard init note: {e}")
 
-    # ── Test Telegram Connection ───────────────────────────
-    logger.info("📱 Testing Telegram connection...")
-    if not telegram_bot.send_startup_message():
-        logger.error("❌ Cannot send Telegram message. Check your bot token and chat ID.")
-        sys.exit(1)
-    logger.info("✅ Telegram connection successful!")
-
-    # ── Initialize Scheduler ───────────────────────────────
+    # 10. Background 24/7 Scheduler
     scheduler = TaskScheduler(
         market_data=market_data,
-        technical=technical,
+        signal_engine=signal_engine,
         news_analyzer=news_analyzer,
         ai_analyzer=ai_analyzer,
-        signal_engine=signal_engine,
-        telegram_bot=telegram_bot,
     )
 
-    # ── Initialize Command Handler ─────────────────────────
+    # 11. Telegram Command Handler (/start, /status, /reset)
     cmd_handler = CommandHandler(
         market_data=market_data,
-        technical=technical,
-        news_analyzer=news_analyzer,
-        ai_analyzer=ai_analyzer,
         signal_engine=signal_engine,
         telegram_bot=telegram_bot,
+        risk_engine=risk_engine,
+        news_analyzer=news_analyzer,
+        ai_analyzer=ai_analyzer,
         scheduler=scheduler,
     )
 
-    # ── Start Services ─────────────────────────────────────
-    logger.info("🚀 Starting all services...")
-    threading.Thread(target=start_web_server, daemon=True).start()
+    # 12. Test Telegram Connectivity
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS:
+        logger.info("Verifying Telegram connection...")
+        try:
+            telegram_bot.send_startup_message()
+            logger.info("Telegram connection confirmed.")
+        except Exception as e:
+            logger.warning(f"Telegram startup test warning: {e}")
+
+    # 13. Start Services
     scheduler.start()
-    cmd_handler.start_polling()
+    if TELEGRAM_BOT_TOKEN:
+        cmd_handler.start_polling()
 
-    logger.info("━" * 60)
-    logger.info("✅ AI GOLD SIGNAL SYSTEM IS RUNNING!")
-    logger.info("📊 Analyzing XAUUSD market continuously...")
-    logger.info("📱 Telegram bot is listening for commands...")
-    logger.info("Press Ctrl+C to stop")
-    logger.info("━" * 60)
+    logger.info("🚀 Gold QuickScalp AI is actively monitoring XAUUSD...")
 
-    # ── Run initial analysis immediately ───────────────────
-    logger.info("🔍 Running initial analysis...")
-    time.sleep(3)
-    try:
-        init_sig = scheduler.run_analysis(send_regardless=False)
-        if init_sig and (init_sig.get("direction") == "NEUTRAL" or init_sig.get("confidence", 0) < 65):
-            telegram_bot.send_message(
-                f"📊 <b>প্রাথমিক গোল্ড মার্কেট স্ক্যান সম্পন্ন</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"💰 <b>বর্তমান প্রাইস:</b> <code>${init_sig.get('entry', 0)}</code> (TradingView)\n"
-                f"⚖️ <b>মার্কেট অবস্থা:</b> <b>নিরপেক্ষ (কনফার্মেশন অপেক্ষা)</b>\n"
-                f"📈 <b>টেকনিক্যাল স্কোর:</b> <b>{init_sig.get('tech_score', 0)}/100</b>\n"
-                f"🤖 <b>এআই কনফিডেন্স:</b> <b>{init_sig.get('confidence', 0)}%</b>\n\n"
-                f"<i>সিস্টেম সার্বক্ষণিক নজর রাখছে। কোনো সুযোগ আসলেই সাথে সাথে স্বয়ংক্রিয় BUY/SELL সিগনাল ও নোটিফিকেশন পাঠানো হবে!</i>"
-            )
-    except Exception as e:
-        logger.error(f"Initial analysis error: {e}")
-
-    # ── Graceful Shutdown ──────────────────────────────────
+    # 14. Graceful Shutdown Handler
     def shutdown(signum, frame):
-        logger.info("\n🛑 Shutting down gracefully...")
+        logger.info("\n🛑 Halting Gold QuickScalp AI gracefully...")
         scheduler.stop()
         cmd_handler.stop_polling()
-        telegram_bot.send_message("🛑 <b>AI Gold Signal System has been stopped.</b>")
-        logger.info("✅ System stopped. Goodbye!")
+        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS:
+            telegram_bot.send_shutdown_message()
+        logger.info("System halted cleanly. Goodbye.")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    # ── Keep running ───────────────────────────────────────
+    # 15. Keep-Alive Loop with Hourly Heartbeat
     while True:
         try:
             time.sleep(60)
-            # Log heartbeat every hour
-            now = datetime.now(pytz.timezone(TIMEZONE))
-            if now.minute == 0:
-                price = market_data.get_current_price()
-                logger.info(f"💓 Heartbeat | Gold: {price} | {now.strftime('%H:%M %Z')}")
+            now_tz = datetime.now(pytz.timezone(TIMEZONE))
+            if now_tz.minute == 0:
+                p = market_data.get_current_price()
+                logger.info(f"💓 Heartbeat | XAUUSD: {p} | Mode: {OPERATING_MODE} | {now_tz.strftime('%H:%M %Z')}")
         except KeyboardInterrupt:
             shutdown(None, None)
         except Exception as e:
-            logger.error(f"Main loop error: {e}")
-            time.sleep(10)
+            logger.error(f"Main loop note: {e}")
+            time.sleep(5)
 
 
 if __name__ == "__main__":
