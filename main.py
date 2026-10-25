@@ -71,17 +71,34 @@ except Exception as e:
 
 
 def start_web_server():
-    """Runs optional local diagnostic dashboard"""
-    if not HAS_DASHBOARD:
-        return
+    """Runs local diagnostic dashboard or cloud health check server for Render / Railway"""
     port = int(os.environ.get("PORT", 8080))
-    import logging as py_logging
-    py_logging.getLogger("werkzeug").setLevel(py_logging.ERROR)
+    if HAS_DASHBOARD:
+        import logging as py_logging
+        py_logging.getLogger("werkzeug").setLevel(py_logging.ERROR)
+        try:
+            logger.info(f"🌐 Web Dashboard running on http://0.0.0.0:{port}")
+            web_app.run(host="0.0.0.0", port=port, use_reloader=False)
+            return
+        except Exception as e:
+            logger.warning(f"Web server warning: {e}")
+
+    # Fallback minimal HTTP health check for Cloud deployments
     try:
-        logger.info(f"🌐 Web Dashboard running on http://localhost:{port}")
-        web_app.run(host="0.0.0.0", port=port, use_reloader=False)
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        class HealthCheckHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"Gold QuickScalp AI is Online")
+            def log_message(self, format, *args):
+                pass
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        logger.info(f"🌐 Cloud Health Check Server running on port {port}")
+        server.serve_forever()
     except Exception as e:
-        logger.warning(f"Web server warning: {e}")
+        logger.warning(f"Fallback HTTP server error: {e}")
 
 
 def validate_config():
@@ -157,7 +174,7 @@ def main():
     news_analyzer = NewsAnalyzer()
     ai_analyzer   = AIAnalyzer(api_key=GEMINI_API_KEY)
 
-    # 9. Dashboard Context (if available)
+    # 9. Cloud / Web Server Port Binding (Mandatory for Render / Railway)
     if HAS_DASHBOARD:
         try:
             init_dashboard_context(
@@ -169,9 +186,9 @@ def main():
                 db_manager=db_manager,
                 risk_engine=risk_engine,
             )
-            threading.Thread(target=start_web_server, daemon=True).start()
         except Exception as e:
             logger.debug(f"Dashboard init note: {e}")
+    threading.Thread(target=start_web_server, daemon=True).start()
 
     # 10. Background 24/7 Scheduler
     scheduler = TaskScheduler(
