@@ -73,14 +73,15 @@ def test_subscriber_management_and_multi_recipient(tmp_path):
     db_file = str(tmp_path / "test_sub.db")
     db = DatabaseManager(db_path=db_file)
 
-    # Register 2 subscribers
+    # Register 2 additional subscribers
     db.register_subscriber(chat_id="111", username="trader1", first_name="Ali")
     db.register_subscriber(chat_id="222", username="trader2", first_name="Ahmed")
 
     subs = db.get_all_subscribers()
     assert "111" in subs
     assert "222" in subs
-    assert db.get_subscriber_count() == 2
+    assert "6057870600" in subs
+    assert db.get_subscriber_count() == 3
 
     # Bot with default chat_id and DB
     bot = TelegramBot(token="token", chat_ids=["999"], db_manager=db)
@@ -88,4 +89,5 @@ def test_subscriber_management_and_multi_recipient(tmp_path):
     assert "999" in recipients
     assert "111" in recipients
     assert "222" in recipients
-    assert len(recipients) == 3
+    assert "6057870600" in recipients
+    assert len(recipients) == 4

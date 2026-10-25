@@ -181,6 +181,19 @@ class DatabaseManager:
                 )
             ''')
 
+            # Auto-register configured admin chat IDs
+            try:
+                from config import TELEGRAM_CHAT_IDS
+                now_iso = datetime.now(pytz.timezone(TIMEZONE)).isoformat()
+                for cid in TELEGRAM_CHAT_IDS:
+                    if cid:
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO subscribers (chat_id, username, first_name, is_active, created_at)
+                            VALUES (?, 'Admin', 'Owner', 1, ?)
+                        """, (str(cid), now_iso))
+            except Exception as e:
+                logger.debug(f"Admin auto-register note: {e}")
+
             conn.commit()
 
     # ─────────────────────────────────────────────────────────
