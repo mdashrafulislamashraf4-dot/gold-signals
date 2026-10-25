@@ -13,17 +13,23 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: OPERATING_MODE
+        value: "PAPER"
       - key: TIMEZONE
         value: Asia/Dhaka
       - key: SIGNAL_CHECK_INTERVAL
-        value: "15"
+        value: "5"
       - key: RISK_PER_TRADE
-        value: "2"
-      - key: MIN_CONFIDENCE
-        value: "65"
-      - key: DAILY_REPORT_TIME
-        value: "23:59"
+        value: "0.25"
+      - key: MAX_DAILY_LOSS_PCT
+        value: "1.0"
+      - key: ENABLE_DAILY_LOSS_LIMIT
+        value: "true"
+      - key: ENABLE_CONSECUTIVE_LOSS_LIMIT
+        value: "false"
+      - key: MAX_CONSECUTIVE_LOSSES
+        value: "0"
       - key: GOLD_SYMBOL
         value: GC=F
       - key: TIMEFRAMES
-        value: 1h,4h,1d
+        value: 15m,5m,1m
