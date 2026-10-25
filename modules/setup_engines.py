@@ -176,22 +176,19 @@ class SetupEngines:
 
             all_highs = sorted(list(set(all_highs)))
 
-            # Select nearest structure target for TP1
-            valid_targets = [h for h in all_highs if (h - entry) >= max(cost_per_oz * 2.5, 1.20)]
+            # Select nearest high-probability structure target
+            valid_targets = [h for h in all_highs if (h - entry) >= max(cost_per_oz * 2.5, 1.80)]
             if valid_targets:
-                tp1 = valid_targets[0]
-                tp2 = valid_targets[1] if len(valid_targets) > 1 else round(entry + (risk_dist * 2.0), 2)
-                target_basis = f"M5/M15 Structural Swing Resistance at ${tp1:.2f}"
+                tp = valid_targets[0]
+                target_basis = f"M5/M15 Structural Resistance at ${tp:.2f}"
             else:
-                # Dynamic ATR-based structure fallback (1.3R and 2.0R)
-                tp1 = round(entry + max(risk_dist * 1.3, atr * 0.8), 2)
-                tp2 = round(entry + max(risk_dist * 2.0, atr * 1.5), 2)
-                target_basis = f"Dynamic Volatility Target (ATR {atr:.2f})"
+                # High-probability realistic quick-scalp target (typically $2.20 to $3.50 on Gold)
+                tp = round(entry + max(2.20, min(risk_dist * 1.1, atr * 0.75)), 2)
+                target_basis = f"High-Probability Scalp Target (${tp - entry:.2f})"
 
-            gross_tp1_move = round(tp1 - entry, 2)
-            net_tp1_reward = round(gross_tp1_move - cost_per_oz, 2)
-            rr_tp1 = round(gross_tp1_move / risk_dist, 2)
-            rr_tp2 = round((tp2 - entry) / risk_dist, 2)
+            gross_move = round(tp - entry, 2)
+            net_reward = round(gross_move - cost_per_oz, 2)
+            rr = round(gross_move / risk_dist, 2)
 
         else:  # SELL
             # Search for swing lows below entry
@@ -205,40 +202,40 @@ class SetupEngines:
 
             all_lows = sorted(list(set(all_lows)), reverse=True)
 
-            valid_targets = [l for l in all_lows if (entry - l) >= max(cost_per_oz * 2.5, 1.20)]
+            valid_targets = [l for l in all_lows if (entry - l) >= max(cost_per_oz * 2.5, 1.80)]
             if valid_targets:
-                tp1 = valid_targets[0]
-                tp2 = valid_targets[1] if len(valid_targets) > 1 else round(entry - (risk_dist * 2.0), 2)
-                target_basis = f"M5/M15 Structural Swing Support at ${tp1:.2f}"
+                tp = valid_targets[0]
+                target_basis = f"M5/M15 Structural Support at ${tp:.2f}"
             else:
-                tp1 = round(entry - max(risk_dist * 1.3, atr * 0.8), 2)
-                tp2 = round(entry - max(risk_dist * 2.0, atr * 1.5), 2)
-                target_basis = f"Dynamic Volatility Target (ATR {atr:.2f})"
+                tp = round(entry - max(2.20, min(risk_dist * 1.1, atr * 0.75)), 2)
+                target_basis = f"High-Probability Scalp Target (${entry - tp:.2f})"
 
-            gross_tp1_move = round(entry - tp1, 2)
-            net_tp1_reward = round(gross_tp1_move - cost_per_oz, 2)
-            rr_tp1 = round(gross_tp1_move / risk_dist, 2)
-            rr_tp2 = round((entry - tp2) / risk_dist, 2)
+            gross_move = round(entry - tp, 2)
+            net_reward = round(gross_move - cost_per_oz, 2)
+            rr = round(gross_move / risk_dist, 2)
 
         # Reject if net reward is negative or insufficient relative to risk
-        if net_tp1_reward <= 0 or rr_tp1 < MIN_RR_RATIO:
+        if net_reward <= 0 or rr < 0.65:
             return {
                 "valid": False,
-                "reason": f"Target reward (${net_tp1_reward:.2f}) or R:R (1:{rr_tp1}) insufficient after trading costs (${cost_per_oz:.2f})",
-                "tp1": tp1,
-                "tp2": tp2,
-                "rr_tp1": rr_tp1,
+                "reason": f"Target reward (${net_reward:.2f}) or R:R (1:{rr}) insufficient after trading costs (${cost_per_oz:.2f})",
+                "tp": tp,
+                "tp1": tp,
+                "tp2": tp,
+                "rr_tp1": rr,
+                "rr_tp2": rr,
             }
 
         return {
             "valid": True,
-            "tp1": tp1,
-            "tp2": tp2,
-            "gross_move": gross_tp1_move,
-            "net_reward": net_tp1_reward,
+            "tp": tp,
+            "tp1": tp,
+            "tp2": tp,
+            "gross_move": gross_move,
+            "net_reward": net_reward,
             "cost_per_oz": round(cost_per_oz, 2),
-            "rr_tp1": rr_tp1,
-            "rr_tp2": rr_tp2,
+            "rr_tp1": rr,
+            "rr_tp2": rr,
             "target_basis": target_basis,
         }
 
@@ -297,11 +294,17 @@ class SetupEngines:
             if bullish_sweep:
                 break
 
-        # Check BOS for Bullish Sweep: Price broke above intermediate minor high
+        # ── M15 Trend Direction Context ──
+        m15_close = float(df_15m_c["Close"].iloc[-2])
+        m15_ema50 = float(df_15m_c["EMA_50"].iloc[-2]) if "EMA_50" in df_15m_c.columns else m15_close
+        is_bullish_trend = m15_close >= (m15_ema50 - 0.80)
+        is_bearish_trend = m15_close <= (m15_ema50 + 0.80)
+
+        # Check BOS for Bullish Sweep: Price broke above intermediate minor high with completed bar
         bullish_bos = False
         if bullish_sweep and swings_5m.get("highs"):
             recent_high = swings_5m["highs"][-1]["price"]
-            if float(last_completed["Close"]) > recent_high or float(last_completed["High"]) > recent_high:
+            if float(last_completed["Close"]) > recent_high:
                 bullish_bos = True
 
         # ── Check Bearish Sweep (Buy-side liquidity grabbed) ──
@@ -323,10 +326,11 @@ class SetupEngines:
             if bearish_sweep:
                 break
 
+        # Check BOS for Bearish Sweep: Price broke below intermediate minor low with completed bar
         bearish_bos = False
         if bearish_sweep and swings_5m.get("lows"):
             recent_low = swings_5m["lows"][-1]["price"]
-            if float(last_completed["Close"]) < recent_low or float(last_completed["Low"]) < recent_low:
+            if float(last_completed["Close"]) < recent_low:
                 bearish_bos = True
 
         # ── M1 Entry Confirmation ──
@@ -342,12 +346,12 @@ class SetupEngines:
             m1_buy_confirmed = (m1_close >= m1_ema20) and (m1_rsi >= 44.0)
             m1_sell_confirmed = (m1_close <= m1_ema20) and (m1_rsi <= 56.0)
 
-        # Decide candidate
-        if bullish_sweep and (bullish_bos or float(last_completed["Close"]) > float(last_completed["Open"])) and m1_buy_confirmed:
+        # Decide candidate (strictly trend-aligned & confirmed BOS)
+        if bullish_sweep and bullish_bos and is_bullish_trend and m1_buy_confirmed:
             entry = round(current_price, 2)
-            # SL beyond the sweep wick extreme + volatility buffer
-            sl_buffer = max(round(atr * 0.35, 2), 0.80)
-            sl = round(min(sweep_wick_low, entry - 1.50) - sl_buffer, 2)
+            # SL beyond the sweep wick extreme + healthy Gold volatility buffer
+            sl_buffer = max(round(atr * 0.70, 2), 2.80)
+            sl = round(min(sweep_wick_low, entry - 2.00) - sl_buffer, 2)
 
             tgt = cls.calculate_adaptive_targets("BUY", entry, sl, swings_5m, swings_15m, fvgs, atr, current_spread)
             if tgt["valid"]:
@@ -356,20 +360,21 @@ class SetupEngines:
                     "engine_name": "Liquidity Sweep + BOS",
                     "direction": "BUY",
                     "entry": entry,
+                    "tp": tgt["tp"],
                     "tp1": tgt["tp1"],
                     "tp2": tgt["tp2"],
                     "sl": sl,
                     "rr_tp1": tgt["rr_tp1"],
                     "rr_tp2": tgt["rr_tp2"],
                     "target_basis": tgt["target_basis"],
-                    "sl_reason": f"Below sweep low ${swept_low} with ${sl_buffer} ATR buffer",
+                    "sl_reason": f"Below sweep low ${swept_low} with ${sl_buffer} buffer",
                     "reasoning": f"Swept SSL at ${swept_low:.2f}, BOS confirmed on M5, M1 aligned.",
                 }
 
-        if bearish_sweep and (bearish_bos or float(last_completed["Close"]) < float(last_completed["Open"])) and m1_sell_confirmed:
+        if bearish_sweep and bearish_bos and is_bearish_trend and m1_sell_confirmed:
             entry = round(current_price, 2)
-            sl_buffer = max(round(atr * 0.35, 2), 0.80)
-            sl = round(max(sweep_wick_high, entry + 1.50) + sl_buffer, 2)
+            sl_buffer = max(round(atr * 0.70, 2), 2.80)
+            sl = round(max(sweep_wick_high, entry + 2.00) + sl_buffer, 2)
 
             tgt = cls.calculate_adaptive_targets("SELL", entry, sl, swings_5m, swings_15m, fvgs, atr, current_spread)
             if tgt["valid"]:
@@ -378,13 +383,14 @@ class SetupEngines:
                     "engine_name": "Liquidity Sweep + BOS",
                     "direction": "SELL",
                     "entry": entry,
+                    "tp": tgt["tp"],
                     "tp1": tgt["tp1"],
                     "tp2": tgt["tp2"],
                     "sl": sl,
                     "rr_tp1": tgt["rr_tp1"],
                     "rr_tp2": tgt["rr_tp2"],
                     "target_basis": tgt["target_basis"],
-                    "sl_reason": f"Above sweep high ${swept_high} with ${sl_buffer} ATR buffer",
+                    "sl_reason": f"Above sweep high ${swept_high} with ${sl_buffer} buffer",
                     "reasoning": f"Swept BSL at ${swept_high:.2f}, BOS confirmed on M5, M1 aligned.",
                 }
 
@@ -459,8 +465,8 @@ class SetupEngines:
 
                 if m1_confirmed:
                     entry = round(current_price, 2)
-                    sl_buffer = max(round(atr * 0.35, 2), 0.80)
-                    sl = round(min(low_5m, entry - 1.50) - sl_buffer, 2)
+                    sl_buffer = max(round(atr * 0.70, 2), 2.80)
+                    sl = round(min(low_5m, entry - 2.00) - sl_buffer, 2)
 
                     tgt = cls.calculate_adaptive_targets("BUY", entry, sl, swings_5m, swings_15m, fvgs, atr, current_spread)
                     if tgt["valid"]:
@@ -469,6 +475,7 @@ class SetupEngines:
                             "engine_name": "Trend Pullback + EMA Retest",
                             "direction": "BUY",
                             "entry": entry,
+                            "tp": tgt["tp"],
                             "tp1": tgt["tp1"],
                             "tp2": tgt["tp2"],
                             "sl": sl,
@@ -493,8 +500,8 @@ class SetupEngines:
 
                 if m1_confirmed:
                     entry = round(current_price, 2)
-                    sl_buffer = max(round(atr * 0.35, 2), 0.80)
-                    sl = round(max(high_5m, entry + 1.50) + sl_buffer, 2)
+                    sl_buffer = max(round(atr * 0.70, 2), 2.80)
+                    sl = round(max(high_5m, entry + 2.00) + sl_buffer, 2)
 
                     tgt = cls.calculate_adaptive_targets("SELL", entry, sl, swings_5m, swings_15m, fvgs, atr, current_spread)
                     if tgt["valid"]:
@@ -503,6 +510,7 @@ class SetupEngines:
                             "engine_name": "Trend Pullback + EMA Retest",
                             "direction": "SELL",
                             "entry": entry,
+                            "tp": tgt["tp"],
                             "tp1": tgt["tp1"],
                             "tp2": tgt["tp2"],
                             "sl": sl,
@@ -566,7 +574,7 @@ class SetupEngines:
             retested = float(last_m5["Low"]) <= (range_high + 0.40) and float(last_m5["Close"]) >= (range_high - 0.20)
             if retested and float(last_m5["Close"]) >= float(last_m5["Open"]):
                 entry = round(current_price, 2)
-                sl_buffer = max(round(atr * 0.30, 2), 0.70)
+                sl_buffer = max(round(atr * 0.70, 2), 2.80)
                 sl = round(range_high - sl_buffer, 2)
 
                 tgt = cls.calculate_adaptive_targets("BUY", entry, sl, swings_5m, swings_15m, fvgs, atr, current_spread)
@@ -576,6 +584,7 @@ class SetupEngines:
                         "engine_name": "Range Breakout + Retest",
                         "direction": "BUY",
                         "entry": entry,
+                        "tp": tgt["tp"],
                         "tp1": tgt["tp1"],
                         "tp2": tgt["tp2"],
                         "sl": sl,
@@ -592,7 +601,7 @@ class SetupEngines:
             retested = float(last_m5["High"]) >= (range_low - 0.40) and float(last_m5["Close"]) <= (range_low + 0.20)
             if retested and float(last_m5["Close"]) <= float(last_m5["Open"]):
                 entry = round(current_price, 2)
-                sl_buffer = max(round(atr * 0.30, 2), 0.70)
+                sl_buffer = max(round(atr * 0.70, 2), 2.80)
                 sl = round(range_low + sl_buffer, 2)
 
                 tgt = cls.calculate_adaptive_targets("SELL", entry, sl, swings_5m, swings_15m, fvgs, atr, current_spread)
@@ -602,6 +611,7 @@ class SetupEngines:
                         "engine_name": "Range Breakout + Retest",
                         "direction": "SELL",
                         "entry": entry,
+                        "tp": tgt["tp"],
                         "tp1": tgt["tp1"],
                         "tp2": tgt["tp2"],
                         "sl": sl,

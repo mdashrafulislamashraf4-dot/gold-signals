@@ -170,10 +170,10 @@ class SignalEngine:
             ev_type  = ev["event"]
             trade_id = ev["trade_id"]
 
-            if ev_type == "TP1_HIT":
-                logger.info(f"✅ Trade #{trade_id:03d} reached TP1 at {ev.get('exit_price')}. Moving SL to BE.")
+            if ev_type in ("TP_HIT", "TP1_HIT"):
+                logger.info(f"✅ Trade #{trade_id:03d} reached TP at {ev.get('exit_price')}. Trade closed with profit.")
                 if self.telegram:
-                    self.telegram.send_tp1_hit(trade_id)
+                    self.telegram.send_tp_hit(trade_id)
 
             elif ev_type == "TP2_HIT":
                 logger.info(f"🏆 Trade #{trade_id:03d} reached TP2 at {ev.get('exit_price')}. Trade closed.")

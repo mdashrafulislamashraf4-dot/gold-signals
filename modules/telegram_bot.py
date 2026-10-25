@@ -61,8 +61,11 @@ class TelegramBot:
     def send_signal(self, signal: Dict[str, Any]) -> bool:
         """
         Sends minimal format:
-        🟢 BUY #001 Entry: 2685.50 TP1: 2690.00 TP2: 2694.50 SL: 2681.00
-        🔴 SELL #002 Entry: 2685.50 TP1: 2681.00 TP2: 2676.50 SL: 2689.50
+        Single TP:
+          🟢 BUY #001 Entry: 2685.50 TP: 2690.00 SL: 2681.00
+          🔴 SELL #002 Entry: 2685.50 TP: 2681.00 SL: 2689.50
+        Two-Stage TP (if configured):
+          🟢 BUY #001 Entry: 2685.50 TP1: 2690.00 TP2: 2694.50 SL: 2681.00
         """
         direction = signal.get("direction", "").upper()
         if direction not in ("BUY", "SELL"):
@@ -72,16 +75,30 @@ class TelegramBot:
         trade_id = signal.get("trade_id", 1)
         emoji = "🟢" if direction == "BUY" else "🔴"
         entry = float(signal.get("entry", signal.get("entry_price", 0.0)))
-        tp1   = float(signal.get("tp1", 0.0))
-        tp2   = float(signal.get("tp2", 0.0))
         sl    = float(signal.get("sl", 0.0))
+        tp    = signal.get("tp")
+        tp1   = signal.get("tp1")
+        tp2   = signal.get("tp2")
 
-        text = f"{emoji} {direction} #{trade_id:03d} Entry: {entry:.2f} TP1: {tp1:.2f} TP2: {tp2:.2f} SL: {sl:.2f}"
+        # Single TP Format
+        if tp is not None or (tp1 is not None and tp2 is not None and tp1 == tp2):
+            target_tp = float(tp if tp is not None else tp1)
+            text = f"{emoji} {direction} #{trade_id:03d} Entry: {entry:.2f} TP: {target_tp:.2f} SL: {sl:.2f}"
+        else:
+            tp1_val = float(tp1 or 0.0)
+            tp2_val = float(tp2 or 0.0)
+            text = f"{emoji} {direction} #{trade_id:03d} Entry: {entry:.2f} TP1: {tp1_val:.2f} TP2: {tp2_val:.2f} SL: {sl:.2f}"
+
         return self._send_raw_text(text)
 
     # ─────────────────────────────────────────────────────────
     # 2. Trade Result Messages
     # ─────────────────────────────────────────────────────────
+    def send_tp_hit(self, trade_id: int) -> bool:
+        """✅ #001 TP HIT"""
+        text = f"✅ #{trade_id:03d} TP HIT"
+        return self._send_raw_text(text)
+
     def send_tp1_hit(self, trade_id: int) -> bool:
         """✅ #001 TP1 HIT"""
         text = f"✅ #{trade_id:03d} TP1 HIT"

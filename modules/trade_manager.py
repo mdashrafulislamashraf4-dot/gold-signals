@@ -133,6 +133,38 @@ class TradeManager:
 
                     elif tp1_touched:
                         exit_price = round(tp1 - slippage_pt, 2)
+                        # Single TP Mode (100% full close on target)
+                        if tp1 == tp2:
+                            pnl_dist   = exit_price - entry
+                            gross_pnl  = round(pnl_dist * full_lot * LOT_SIZE, 2)
+                            net_pnl    = round(gross_pnl - comm_total, 2)
+                            pnl_r      = round(pnl_dist / risk_dist, 2)
+                            pnl_pips   = round(pnl_dist * 10.0, 1)
+
+                            self.db.close_signal(
+                                signal_id=sig_id,
+                                result="TP_HIT",
+                                close_price=exit_price,
+                                exit_reason="Take Profit target reached",
+                                pnl_usd=net_pnl,
+                                pnl_r=pnl_r,
+                                pnl_pips=pnl_pips,
+                                commission=comm_total,
+                                slippage=slippage_pt,
+                            )
+                            self.db.update_paper_account(net_pnl, is_win=True)
+                            self.db.record_trade_win(net_pnl)
+
+                            events.append({
+                                "event": "TP_HIT",
+                                "trade_id": trade_id,
+                                "signal_id": sig_id,
+                                "exit_price": exit_price,
+                                "net_pnl": net_pnl,
+                            })
+                            continue
+
+                        # Two-Stage TP Fallback (Partial Close)
                         partial_ratio = PARTIAL_CLOSE_RATIO  # e.g. 0.50
                         partial_lot   = round(full_lot * partial_ratio, 2)
                         pnl_dist      = exit_price - entry
@@ -206,6 +238,38 @@ class TradeManager:
 
                     elif tp1_touched:
                         exit_price = round(tp1 + slippage_pt, 2)
+                        # Single TP Mode (100% full close on target)
+                        if tp1 == tp2:
+                            pnl_dist   = entry - exit_price
+                            gross_pnl  = round(pnl_dist * full_lot * LOT_SIZE, 2)
+                            net_pnl    = round(gross_pnl - comm_total, 2)
+                            pnl_r      = round(pnl_dist / risk_dist, 2)
+                            pnl_pips   = round(pnl_dist * 10.0, 1)
+
+                            self.db.close_signal(
+                                signal_id=sig_id,
+                                result="TP_HIT",
+                                close_price=exit_price,
+                                exit_reason="Take Profit target reached",
+                                pnl_usd=net_pnl,
+                                pnl_r=pnl_r,
+                                pnl_pips=pnl_pips,
+                                commission=comm_total,
+                                slippage=slippage_pt,
+                            )
+                            self.db.update_paper_account(net_pnl, is_win=True)
+                            self.db.record_trade_win(net_pnl)
+
+                            events.append({
+                                "event": "TP_HIT",
+                                "trade_id": trade_id,
+                                "signal_id": sig_id,
+                                "exit_price": exit_price,
+                                "net_pnl": net_pnl,
+                            })
+                            continue
+
+                        # Two-Stage TP Fallback (Partial Close)
                         partial_ratio = PARTIAL_CLOSE_RATIO
                         partial_lot   = round(full_lot * partial_ratio, 2)
                         pnl_dist      = entry - exit_price
