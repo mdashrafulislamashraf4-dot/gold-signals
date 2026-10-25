@@ -157,8 +157,8 @@ def main():
     # 5. Setup Engines (3 Independent Engines)
     setup_engines = SetupEngines()
 
-    # 6. Telegram Bot Interface
-    telegram_bot = TelegramBot(token=TELEGRAM_BOT_TOKEN, chat_ids=TELEGRAM_CHAT_IDS)
+    # 6. Telegram Bot Interface (Multi-User & Channels)
+    telegram_bot = TelegramBot(token=TELEGRAM_BOT_TOKEN, chat_ids=TELEGRAM_CHAT_IDS, db_manager=db_manager)
 
     # 7. Signal Engine
     signal_engine = SignalEngine(
@@ -198,7 +198,7 @@ def main():
         ai_analyzer=ai_analyzer,
     )
 
-    # 11. Telegram Command Handler (/start, /status, /reset)
+    # 11. Telegram Command Handler (/start, /status, /reset, /subscribers)
     cmd_handler = CommandHandler(
         market_data=market_data,
         signal_engine=signal_engine,
@@ -207,6 +207,7 @@ def main():
         news_analyzer=news_analyzer,
         ai_analyzer=ai_analyzer,
         scheduler=scheduler,
+        db_manager=db_manager,
     )
 
     # 12. Test Telegram Connectivity

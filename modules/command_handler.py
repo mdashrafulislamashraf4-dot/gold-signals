@@ -1,10 +1,10 @@
 """
 ============================================================
   modules/command_handler.py
-  Telegram Command Handler — Commander A Specification
-  Commands: /start, /status, /reset
-  /reset calls risk_engine.reset_consecutive_loss_halt()
-  Minimal plain text responses to Telegram.
+  Telegram Command Handler — Clean Text & Auto-Subscriber
+  Commands: /start, /status, /subscribers, /reset
+  Minimal plain text responses without icon buttons / emojis.
+  Auto-registers anyone who sends /start to receive broadcast signals.
 ============================================================
 """
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class CommandHandler:
-    """Handles Telegram bot commands: /start, /status, /reset"""
+    """Handles Telegram bot commands and auto-registers subscribers"""
 
     BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
@@ -34,6 +34,7 @@ class CommandHandler:
         ai_analyzer=None,
         scheduler=None,
         technical=None,
+        db_manager=None,
     ):
         self.md = market_data
         self.se = signal_engine
@@ -43,6 +44,7 @@ class CommandHandler:
         self.ai = ai_analyzer
         self.sch = scheduler
         self.ta = technical
+        self.db = db_manager or getattr(self.se, 'db', None)
 
         self._offset = 0
         self._running = False
@@ -93,30 +95,49 @@ class CommandHandler:
         if not text:
             return
 
-        # Security: only allow configured chat IDs
-        if TELEGRAM_CHAT_IDS and chat_id not in TELEGRAM_CHAT_IDS:
-            self._reply(chat_id, "⛔ Unauthorized access.")
+        sender = message.get("from", {})
+        username = sender.get("username", "")
+        first_name = sender.get("first_name", "")
+
+        logger.info(f"Command received from {chat_id} ({username}): {text}")
+
+        # 1. /start: Auto-registers ANY user or group into subscribers list
+        if text.startswith("/start"):
+            if self.db:
+                self.db.register_subscriber(chat_id, username, first_name)
+            self._cmd_start(chat_id)
             return
 
-        logger.info(f"Command received from {chat_id}: {text}")
-
-        if text.startswith("/start"):
-            self._cmd_start(chat_id)
-        elif text.startswith("/status"):
+        # 2. /status: Open to all users to check market and bot health
+        if text.startswith("/status"):
             self._cmd_status(chat_id)
-        elif text.startswith("/reset"):
+            return
+
+        # 3. /subscribers: Check total active users/channels
+        if text.startswith("/subscribers"):
+            cnt = self.db.get_subscriber_count() if self.db else len(TELEGRAM_CHAT_IDS)
+            self._reply(chat_id, f"Subscribers: {cnt} active")
+            return
+
+        # 4. /reset: Protected admin command only
+        if text.startswith("/reset"):
+            if TELEGRAM_CHAT_IDS and chat_id not in TELEGRAM_CHAT_IDS:
+                self._reply(chat_id, "Unauthorized. Only configured admin can execute /reset.")
+                return
             self._cmd_reset(chat_id)
-        else:
-            logger.debug(f"Unrecognized command: {text}")
+            return
+
+        logger.debug(f"Unrecognized command: {text}")
 
     def _reply(self, chat_id: str, text: str):
-        """Send a plain text reply to a specific chat_id"""
+        """Send a clean plain text reply without icon buttons and remove any keyboards"""
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             resp = requests.post(url, json={
                 "chat_id": chat_id,
                 "text": text,
                 "disable_web_page_preview": True,
+                "reply_markup": {"remove_keyboard": True},
             }, timeout=15)
             if not resp.ok:
                 logger.error(f"Reply failed: {resp.text}")
@@ -130,15 +151,15 @@ class CommandHandler:
         try:
             price = self.md.get_current_price() or 0.0
             text = (
-                f"🤖 Gold QuickScalp AI\n"
-                f"Mode: {__import__('config').OPERATING_MODE}\n"
-                f"XAUUSD: ${price:.2f}\n"
-                f"Commands: /status /reset"
+                f"Gold QuickScalp AI\n"
+                f"Subscribed to XAUUSD Signals.\n"
+                f"Gold: ${price:.2f}\n"
+                f"Commands: /status"
             )
             self._reply(chat_id, text)
             logger.info(f"/start responded to {chat_id}")
         except Exception as e:
-            self._reply(chat_id, "⚠️ Error fetching status.")
+            self._reply(chat_id, "Error fetching status.")
             logger.error(f"/start error: {e}")
 
     # ─────────────────────────────────────────────────────────
@@ -161,19 +182,20 @@ class CommandHandler:
 
             consec = risk_state.get("consecutive_losses", 0)
             daily_loss = risk_state.get("daily_loss_usd", 0.0)
+            sub_count = self.db.get_subscriber_count() if self.db else 1
 
             text = (
-                f"📊 Status\n"
+                f"Status\n"
                 f"Gold: ${price:.2f}\n"
                 f"Active: {active_line}\n"
                 f"Today: {stats['wins']}W {stats['losses']}L PnL: ${stats['pnl_usd']:.2f}\n"
-                f"Consecutive losses: {consec}\n"
+                f"Subscribers: {sub_count}\n"
                 f"Daily loss: ${daily_loss:.2f}"
             )
             self._reply(chat_id, text)
             logger.info(f"/status responded to {chat_id}")
         except Exception as e:
-            self._reply(chat_id, "⚠️ Error fetching status.")
+            self._reply(chat_id, "Error fetching status.")
             logger.error(f"/status error: {e}")
 
     # ─────────────────────────────────────────────────────────
@@ -183,10 +205,10 @@ class CommandHandler:
         try:
             if self.risk:
                 self.risk.reset_consecutive_loss_halt()
-                self._reply(chat_id, "✅ Trading halt cleared. System resumed.")
+                self._reply(chat_id, "Trading halt cleared. System resumed.")
                 logger.info(f"/reset executed by {chat_id} — consecutive loss halt cleared")
             else:
-                self._reply(chat_id, "⚠️ Risk engine not available.")
+                self._reply(chat_id, "Risk engine not available.")
         except Exception as e:
-            self._reply(chat_id, "⚠️ Reset failed.")
+            self._reply(chat_id, "Reset failed.")
             logger.error(f"/reset error: {e}")

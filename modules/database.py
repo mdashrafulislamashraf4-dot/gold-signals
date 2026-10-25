@@ -169,6 +169,18 @@ class DatabaseManager:
                 except Exception as e:
                     logger.warning(f"Migration note for consecutive_loss_halt: {e}")
 
+            
+            # 6. Subscribers Table (Multi-user and Channel broadcasting)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS subscribers (
+                    chat_id     TEXT PRIMARY KEY,
+                    username    TEXT DEFAULT '',
+                    first_name  TEXT DEFAULT '',
+                    is_active   INTEGER DEFAULT 1,
+                    created_at  TEXT NOT NULL
+                )
+            ''')
+
             conn.commit()
 
     # ─────────────────────────────────────────────────────────
@@ -504,3 +516,41 @@ class DatabaseManager:
                 WHERE date_str = ?
             """, (val, datetime.now(pytz.timezone(TIMEZONE)).isoformat(), today_str))
             conn.commit()
+
+
+    # ─────────────────────────────────────────────────────────
+    # Subscriber Management (Multi-User & Channels)
+    # ─────────────────────────────────────────────────────────
+    def register_subscriber(self, chat_id: str, username: str = "", first_name: str = "") -> bool:
+        """Registers or re-activates a subscriber chat ID"""
+        now_str = datetime.now(pytz.timezone(TIMEZONE)).isoformat()
+        with self.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO subscribers (chat_id, username, first_name, is_active, created_at)
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    username = excluded.username,
+                    first_name = excluded.first_name,
+                    is_active = 1
+            """, (str(chat_id), str(username or ""), str(first_name or ""), now_str))
+            conn.commit()
+        logger.info(f"Subscriber registered/updated: {chat_id} ({username})")
+        return True
+
+    def deactivate_subscriber(self, chat_id: str):
+        """Deactivates a subscriber (e.g. if bot was blocked)"""
+        with self.get_connection() as conn:
+            conn.execute("UPDATE subscribers SET is_active = 0 WHERE chat_id = ?", (str(chat_id),))
+            conn.commit()
+
+    def get_all_subscribers(self) -> list:
+        """Returns all active subscriber chat IDs"""
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT chat_id FROM subscribers WHERE is_active = 1").fetchall()
+            return [str(r["chat_id"]) for r in rows]
+
+    def get_subscriber_count(self) -> int:
+        """Returns active subscriber count"""
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT COUNT(*) as cnt FROM subscribers WHERE is_active = 1").fetchone()
+            return row["cnt"] if row else 0

@@ -65,11 +65,11 @@ def test_signal_message_format_buy():
     }
     bot.send_signal(signal)
     assert len(sent_messages) == 1
-    assert sent_messages[0] == "🟢 BUY #001 Entry: 2685.50 TP1: 2690.00 TP2: 2694.50 SL: 2681.00"
+    assert sent_messages[0] == "BUY #001 Entry: 2685.50 TP1: 2690.00 TP2: 2694.50 SL: 2681.00"
 
 
 def test_signal_message_format_sell():
-    """Verify minimal SELL format: 🔴 SELL #002 Entry: 2685.50 TP1: 2681.00 TP2: 2676.50 SL: 2689.50"""
+    """Verify minimal SELL format: SELL #002 Entry: 2685.50 TP1: 2681.00 TP2: 2676.50 SL: 2689.50"""
     sent_messages = []
 
     class MockTelegramBot(TelegramBot):
@@ -88,11 +88,11 @@ def test_signal_message_format_sell():
     }
     bot.send_signal(signal)
     assert len(sent_messages) == 1
-    assert sent_messages[0] == "🔴 SELL #002 Entry: 2685.50 TP1: 2681.00 TP2: 2676.50 SL: 2689.50"
+    assert sent_messages[0] == "SELL #002 Entry: 2685.50 TP1: 2681.00 TP2: 2676.50 SL: 2689.50"
 
 
 def test_trade_result_formats():
-    """Verify exact minimal trade result messages: TP1, TP2, SL"""
+    """Verify exact minimal trade result messages: TP, SL"""
     sent_messages = []
 
     class MockTelegramBot(TelegramBot):
@@ -106,9 +106,9 @@ def test_trade_result_formats():
     bot.send_tp2_hit(trade_id=1)
     bot.send_sl_hit(trade_id=2)
 
-    assert sent_messages[0] == "✅ #001 TP1 HIT"
-    assert sent_messages[1] == "🏆 #001 TP2 HIT"
-    assert sent_messages[2] == "❌ #002 SL HIT"
+    assert sent_messages[0] == "#001 TP HIT"
+    assert sent_messages[1] == "#001 TP HIT"
+    assert sent_messages[2] == "#002 SL HIT"
 
 
 # ─────────────────────────────────────────────────────────
