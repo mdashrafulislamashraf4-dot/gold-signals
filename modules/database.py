@@ -567,3 +567,36 @@ class DatabaseManager:
         with self.get_connection() as conn:
             row = conn.execute("SELECT COUNT(*) as cnt FROM subscribers WHERE is_active = 1").fetchone()
             return row["cnt"] if row else 0
+
+
+    # ─────────────────────────────────────────────────────────
+    # Engine Performance Breakdown
+    # ─────────────────────────────────────────────────────────
+    def get_engine_performance_stats(self) -> dict:
+        """Returns trade count, wins, losses, and win rate per engine"""
+        with self.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT
+                    COALESCE(setup_engine, 'Unknown') as engine,
+                    COUNT(*) as total_trades,
+                    SUM(CASE WHEN result IN ('TP_HIT', 'TP1_HIT', 'TP2_HIT') THEN 1 ELSE 0 END) as wins,
+                    SUM(CASE WHEN result = 'SL_HIT' THEN 1 ELSE 0 END) as losses,
+                    COALESCE(SUM(pnl_usd), 0.0) as total_pnl
+                FROM signals
+                WHERE status = 'CLOSED'
+                GROUP BY setup_engine
+            """).fetchall()
+            stats = {}
+            for r in rows:
+                t = r["total_trades"]
+                w = r["wins"]
+                l = r["losses"]
+                wr = (w / (w + l) * 100) if (w + l) > 0 else 0.0
+                stats[r["engine"]] = {
+                    "total": t,
+                    "wins": w,
+                    "losses": l,
+                    "win_rate": round(wr, 1),
+                    "pnl_usd": round(r["total_pnl"], 2),
+                }
+            return stats

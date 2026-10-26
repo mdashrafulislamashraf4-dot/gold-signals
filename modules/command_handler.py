@@ -119,7 +119,12 @@ class CommandHandler:
             self._reply(chat_id, f"Subscribers: {cnt} active")
             return
 
-        # 4. /reset: Protected admin command only
+        # 4. /engines: Check independent performance of all 3 engines
+        if text.startswith("/engines"):
+            self._cmd_engines(chat_id)
+            return
+
+        # 5. /reset: Protected admin command only
         if text.startswith("/reset"):
             if TELEGRAM_CHAT_IDS and chat_id not in TELEGRAM_CHAT_IDS:
                 self._reply(chat_id, "Unauthorized. Only configured admin can execute /reset.")
@@ -197,6 +202,27 @@ class CommandHandler:
         except Exception as e:
             self._reply(chat_id, "Error fetching status.")
             logger.error(f"/status error: {e}")
+
+    # ─────────────────────────────────────────────────────────
+    # /engines
+    # ─────────────────────────────────────────────────────────
+    def _cmd_engines(self, chat_id: str):
+        try:
+            stats = self.db.get_engine_performance_stats() if self.db else {}
+            lines = ["Engines Performance:"]
+            names = [
+                "Liquidity Sweep + BOS",
+                "Trend Pullback + EMA Retest",
+                "Range Breakout + Retest"
+            ]
+            for n in names:
+                data = stats.get(n, {"wins": 0, "losses": 0, "total": 0, "win_rate": 0.0})
+                lines.append(f"{n}: {data['wins']}W {data['losses']}L ({data['win_rate']}%)")
+            self._reply(chat_id, "\n".join(lines))
+            logger.info(f"/engines responded to {chat_id}")
+        except Exception as e:
+            self._reply(chat_id, "Error fetching engine stats.")
+            logger.error(f"/engines error: {e}")
 
     # ─────────────────────────────────────────────────────────
     # /reset
